@@ -1,0 +1,86 @@
+ShipSmart-API Proprietary License
+Copyright (c) 2026 Nia. All Rights Reserved.
+
+NOTICE: This software and its associated source code, documentation,
+configuration, assets, and any related materials (collectively, the
+"Software") are the exclusive property of the copyright holder
+("Licensor"). The Software is made visible in a public repository
+solely for transparency, portfolio, and reference purposes. Public
+visibility does NOT grant any license, right, or permission to use
+the Software in any manner.
+
+1. NO LICENSE GRANTED
+   No rights or licenses are granted, whether expressly, by
+   implication, estoppel, or otherwise, under any patent, copyright,
+   trademark, trade secret, or other intellectual property right of
+   Licensor. All rights not expressly granted herein are reserved by
+   Licensor.
+
+2. PROHIBITED ACTIONS
+   Without the prior written consent of Licensor, you MAY NOT, in
+   whole or in part:
+     (a) use, execute, run, deploy, or host the Software for any
+         purpose, whether commercial or non-commercial;
+     (b) copy, reproduce, download, clone, mirror, archive, or
+         otherwise store the Software outside of the GitHub platform;
+     (c) modify, adapt, translate, port, or create derivative works
+         based on the Software;
+     (d) distribute, publish, sublicense, sell, rent, lease, lend,
+         or otherwise transfer the Software or any derivative works;
+     (e) reverse engineer, decompile, disassemble, or attempt to
+         derive the source code, algorithms, structure, or internal
+         design of any compiled or obfuscated portion of the Software;
+     (f) use the Software, in whole or in part, to train, fine-tune,
+         evaluate, benchmark, or otherwise develop any machine
+         learning model, artificial intelligence system, or dataset;
+     (g) incorporate the Software, in whole or in part, into any
+         other project, product, library, or service;
+     (h) use any trademark, service mark, trade name, logo, or
+         product name of Licensor, including but not limited to
+         "ShipSmart," without prior written consent.
+
+3. PERMITTED ACTIONS
+   Subject to GitHub's Terms of Service, you may view the Software
+   through the GitHub web interface and fork the repository within
+   GitHub. Such viewing and forking does not grant any additional
+   rights beyond those expressly provided by GitHub's Terms of
+   Service, and all prohibitions in Section 2 continue to apply to
+   any such fork.
+
+4. NO CONTRIBUTIONS ACCEPTED
+   Unsolicited contributions, pull requests, patches, or suggestions
+   are not accepted. Any contribution submitted to this repository
+   shall become the exclusive property of Licensor, who may use,
+   modify, or discard it without obligation or compensation.
+
+5. TERMINATION
+   Any use of the Software in violation of this License
+   automatically and immediately terminates any rights you may have
+   under this License and may subject you to civil and criminal
+   penalties under applicable intellectual property laws.
+
+6. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS," WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+   OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE,
+   NON-INFRINGEMENT, OR TITLE. LICENSOR MAKES NO REPRESENTATION
+   THAT THE SOFTWARE IS ERROR-FREE, SECURE, OR SUITABLE FOR ANY
+   PURPOSE.
+
+7. LIMITATION OF LIABILITY
+   IN NO EVENT SHALL LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR
+   OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR
+   OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE
+   SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+8. GOVERNING LAW
+   This License shall be governed by and construed in accordance
+   with the laws of the jurisdiction in which Licensor resides,
+   without regard to its conflict of law principles.
+
+9. CONTACT
+   For licensing inquiries, permissions, or commercial use
+   requests, please contact the Licensor through the GitHub
+   profile: https://github.com/nia194
+
+All Rights Reserved.
