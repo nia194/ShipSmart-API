@@ -40,10 +40,10 @@ class CompareRequest(BaseModel):
 
     shipment: ShipmentContext
     option_ids: list[str] = Field(
-        ..., min_items=2, max_items=3, description="2-3 option IDs (for caching)"
+        ..., min_length=2, max_length=3, description="2-3 option IDs (for caching)"
     )
     options: list[CompareOption] = Field(
-        ..., min_items=2, max_items=3, description="Full real option data"
+        ..., min_length=2, max_length=3, description="Full real option data"
     )
     selected_priority: str = Field(
         default="ontime",
