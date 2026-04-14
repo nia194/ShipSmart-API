@@ -1,0 +1,88 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ShipSmart-API — Render Blueprint
+# FastAPI AI/advisory service + MCP tools server (same codebase, two entry points).
+#
+# BEFORE DEPLOYING: Set all sync:false env vars in the Render dashboard.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── FastAPI Python API (AI/advisory: RAG, recommendations, advisors) ───────
+  - type: web
+    name: shipsmart-api-python
+    env: python
+    buildCommand: pip install uv && uv sync
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    plan: starter
+    healthCheckPath: /health
+
+  # ── MCP Tools Server ──────────────────────────────────────────────────────
+  # Exposes tool layer (validate_address, get_quote_preview) via MCP HTTP.
+  # Enables Claude Code, Spring Boot, and other MCP clients to call tools.
+  - type: web
+    name: shipsmart-mcp-tools
+    env: python
+    buildCommand: pip install uv && uv sync
+    startCommand: uvicorn app.mcp_server:app --host 0.0.0.0 --port $PORT
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://shipsmart-web.onrender.com
+      - key: INTERNAL_JAVA_API_URL
+        value: https://shipsmart-api-java.onrender.com
+      # ── Vector Store (RAG persistence) ────────────────────────────────────
+      # Default: memory (lost on restart, safe for testing)
+      # For production RAG: pgvector + Supabase PostgreSQL
+      - key: VECTOR_STORE_TYPE
+        value: memory
+      - key: DATABASE_URL
+        sync: false
+        # When VECTOR_STORE_TYPE=pgvector, set to Supabase async PostgreSQL URL:
+        # postgresql://user:pass@project-ref.pooler.supabase.com:6543/postgres?sslmode=require
+      - key: PGVECTOR_TABLE
+        value: rag_chunks
+      # ── LLM Provider ──────────────────────────────────────────────────────
+      # Leave empty for EchoClient (mock, no external AI calls)
+      # Set to: openai, gemini, anthropic, llama, "" (empty = EchoClient)
+      - key: LLM_PROVIDER
+        value: ""
+      - key: OPENAI_API_KEY
+        sync: false
+      # ── Task-based LLM Routing (optional) ─────────────────────────────────
+      # Per-task provider selection. Empty = inherit LLM_PROVIDER.
+      - key: LLM_PROVIDER_REASONING
+        value: ""
+      - key: LLM_PROVIDER_SYNTHESIS
+        value: ""
+      - key: LLM_PROVIDER_FALLBACK
+        value: echo
+      # ── Embeddings ────────────────────────────────────────────────────────
+      # Leave empty for LocalHashEmbedding (lexical, not semantic)
+      # Set to: openai (requires OPENAI_API_KEY)
+      - key: EMBEDDING_PROVIDER
+        value: ""
+      - key: EMBEDDING_MODEL
+        value: text-embedding-3-small
+      - key: EMBEDDING_DIMENSIONS
+        value: "1536"
+      # ── RAG / Knowledge Base ──────────────────────────────────────────────
+      - key: RAG_AUTO_INGEST
+        value: "true"
+      - key: RAG_DOCUMENTS_PATH
+        value: data/documents
+      - key: RAG_TOP_K
+        value: "3"
+      - key: RAG_CHUNK_SIZE
+        value: "500"
+      - key: RAG_CHUNK_OVERLAP
+        value: "50"
+      # ── Providers and tools ───────────────────────────────────────────────
+      - key: SHIPPING_PROVIDER
+        value: mock
+      - key: ENABLE_TOOLS
+        value: "true"
