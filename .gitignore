@@ -1,0 +1,63 @@
+# ─── Byte-compiled / cache ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ─── Virtual env ──────────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.uv/
+
+# ─── Distribution / packaging ─────────────────────────────────────────────────
+build/
+dist/
+*.egg
+*.egg-info/
+.eggs/
+wheels/
+pip-wheel-metadata/
+
+# ─── Test / coverage ──────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# ─── Type checkers / linters ──────────────────────────────────────────────────
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+
+# ─── FastAPI / Jupyter ────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+instance/
+
+# ─── Env / Secrets ────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── IDE ──────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Claude / AI tooling (local only, never commit) ───────────────────────────
+.claude/
+
