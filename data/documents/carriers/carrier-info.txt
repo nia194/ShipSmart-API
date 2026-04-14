@@ -1,0 +1,13 @@
+ShipSmart Carrier Information
+
+UPS (United Parcel Service)
+UPS offers a wide range of shipping services for domestic and international deliveries. Service levels include UPS Ground (3-5 business days), UPS 3 Day Select, UPS 2nd Day Air, and UPS Next Day Air. UPS provides package tracking, delivery confirmation, and insurance options. Maximum weight per package is 150 lbs.
+
+FedEx (Federal Express)
+FedEx provides domestic and international shipping with options including FedEx Ground (1-5 business days), FedEx Express Saver (3 business days), FedEx 2Day, and FedEx Priority Overnight. FedEx also offers FedEx SmartPost for lightweight residential deliveries. Maximum weight per package is 150 lbs.
+
+USPS (United States Postal Service)
+USPS offers several shipping services: Priority Mail (1-3 business days), Priority Mail Express (1-2 days guaranteed), First-Class Mail (up to 13 oz), and Parcel Select Ground. USPS is often the most economical choice for lightweight packages and provides free package pickup from homes and businesses. Maximum weight is 70 lbs.
+
+DHL (DHL Express)
+DHL specializes in international shipping and express delivery worldwide. Services include DHL Express Worldwide, DHL Express 9:00, and DHL Express 12:00. DHL has the largest international network with delivery to over 220 countries and territories. DHL also offers domestic shipping in select markets.
