@@ -33,59 +33,54 @@ def test_factory_returns_mock_for_empty_string():
         assert isinstance(provider, MockShippingProvider)
 
 
-def test_factory_returns_mock_for_unknown_provider():
-    """Unknown provider name falls back to mock with warning."""
+def test_factory_raises_for_unknown_provider():
     with patch("app.providers.settings") as mock_settings:
         mock_settings.shipping_provider = "carrier_pigeon"
-        provider = create_shipping_provider()
-        assert isinstance(provider, MockShippingProvider)
+        with pytest.raises(ValueError, match="Unknown SHIPPING_PROVIDER"):
+            create_shipping_provider()
 
 
-def test_factory_falls_back_when_ups_credentials_missing():
-    """SHIPPING_PROVIDER=ups but no credentials → falls back to mock."""
+def test_factory_raises_when_ups_credentials_missing():
     with patch("app.providers.settings") as mock_settings:
         mock_settings.shipping_provider = "ups"
         mock_settings.ups_client_id = ""
         mock_settings.ups_client_secret = ""
         mock_settings.ups_account_number = ""
         mock_settings.ups_base_url = "https://onlinetools.ups.com"
-        provider = create_shipping_provider()
-        assert isinstance(provider, MockShippingProvider)
+        with pytest.raises(ValueError, match="UPS_CLIENT_ID"):
+            create_shipping_provider()
 
 
-def test_factory_falls_back_when_fedex_credentials_missing():
-    """SHIPPING_PROVIDER=fedex but no credentials → falls back to mock."""
+def test_factory_raises_when_fedex_credentials_missing():
     with patch("app.providers.settings") as mock_settings:
         mock_settings.shipping_provider = "fedex"
         mock_settings.fedex_client_id = ""
         mock_settings.fedex_client_secret = ""
         mock_settings.fedex_account_number = ""
         mock_settings.fedex_base_url = "https://apis.fedex.com"
-        provider = create_shipping_provider()
-        assert isinstance(provider, MockShippingProvider)
+        with pytest.raises(ValueError, match="FEDEX_CLIENT_ID"):
+            create_shipping_provider()
 
 
-def test_factory_falls_back_when_dhl_credentials_missing():
-    """SHIPPING_PROVIDER=dhl but no credentials → falls back to mock."""
+def test_factory_raises_when_dhl_credentials_missing():
     with patch("app.providers.settings") as mock_settings:
         mock_settings.shipping_provider = "dhl"
         mock_settings.dhl_api_key = ""
         mock_settings.dhl_api_secret = ""
         mock_settings.dhl_account_number = ""
         mock_settings.dhl_base_url = "https://express.api.dhl.com"
-        provider = create_shipping_provider()
-        assert isinstance(provider, MockShippingProvider)
+        with pytest.raises(ValueError, match="DHL_API_KEY"):
+            create_shipping_provider()
 
 
-def test_factory_falls_back_when_usps_credentials_missing():
-    """SHIPPING_PROVIDER=usps but no credentials → falls back to mock."""
+def test_factory_raises_when_usps_credentials_missing():
     with patch("app.providers.settings") as mock_settings:
         mock_settings.shipping_provider = "usps"
         mock_settings.usps_client_id = ""
         mock_settings.usps_client_secret = ""
         mock_settings.usps_base_url = "https://api.usps.com"
-        provider = create_shipping_provider()
-        assert isinstance(provider, MockShippingProvider)
+        with pytest.raises(ValueError, match="USPS_CLIENT_ID"):
+            create_shipping_provider()
 
 
 # ── Credential check tests ──────────────────────────────────────────────────

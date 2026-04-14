@@ -59,6 +59,11 @@ def _required_credentials(provider_name: str) -> list[tuple[str, str]]:
     return []
 
 
+def _has_required_credentials(provider_name: str) -> bool:
+    """True if every required credential for the provider is non-empty."""
+    return all(value.strip() for _, value in _required_credentials(provider_name))
+
+
 def _build_mock() -> ShippingProvider:
     from app.providers.mock_provider import MockShippingProvider
     return MockShippingProvider()
