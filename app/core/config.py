@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     # ── Embeddings ───────────────────────────────────────────────────────────
     embedding_provider: str = ""  # "openai" or "" (empty = local placeholder)
     embedding_model: str = "text-embedding-3-small"
-    embedding_dimensions: int = 256
+    embedding_dimensions: int = 1536
 
     # ── Vector store ─────────────────────────────────────────────────────────
     vector_store_type: str = "memory"  # "memory", "pgvector", or "mcp"
