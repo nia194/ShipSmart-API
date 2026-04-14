@@ -12,18 +12,7 @@ services:
     name: shipsmart-api-python
     env: python
     buildCommand: pip install uv && uv sync
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    plan: starter
-    healthCheckPath: /health
-
-  # ── MCP Tools Server ──────────────────────────────────────────────────────
-  # Exposes tool layer (validate_address, get_quote_preview) via MCP HTTP.
-  # Enables Claude Code, Spring Boot, and other MCP clients to call tools.
-  - type: web
-    name: shipsmart-mcp-tools
-    env: python
-    buildCommand: pip install uv && uv sync
-    startCommand: uvicorn app.mcp_server:app --host 0.0.0.0 --port $PORT
+    startCommand: uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT
     plan: starter
     healthCheckPath: /health
     envVars:
@@ -35,41 +24,50 @@ services:
         value: https://shipsmart-web.onrender.com
       - key: INTERNAL_JAVA_API_URL
         value: https://shipsmart-api-java.onrender.com
-      # ── Vector Store (RAG persistence) ────────────────────────────────────
-      # Default: memory (lost on restart, safe for testing)
-      # For production RAG: pgvector + Supabase PostgreSQL
+      # ── Vector Store (RAG persistence — pgvector for production) ──────────
       - key: VECTOR_STORE_TYPE
-        value: memory
+        value: pgvector
       - key: DATABASE_URL
         sync: false
-        # When VECTOR_STORE_TYPE=pgvector, set to Supabase async PostgreSQL URL:
-        # postgresql://user:pass@project-ref.pooler.supabase.com:6543/postgres?sslmode=require
+        # Set in Render dashboard to Supabase async PostgreSQL URL:
+        # postgresql://postgres.ref:pass@ref.pooler.supabase.com:6543/postgres?sslmode=require
       - key: PGVECTOR_TABLE
         value: rag_chunks
       # ── LLM Provider ──────────────────────────────────────────────────────
-      # Leave empty for EchoClient (mock, no external AI calls)
-      # Set to: openai, gemini, anthropic, llama, "" (empty = EchoClient)
       - key: LLM_PROVIDER
-        value: ""
+        value: openai
       - key: OPENAI_API_KEY
         sync: false
-      # ── Task-based LLM Routing (optional) ─────────────────────────────────
-      # Per-task provider selection. Empty = inherit LLM_PROVIDER.
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-4-5
+      # ── Task-based LLM Routing ────────────────────────────────────────────
       - key: LLM_PROVIDER_REASONING
-        value: ""
+        value: openai
       - key: LLM_PROVIDER_SYNTHESIS
-        value: ""
+        value: openai
       - key: LLM_PROVIDER_FALLBACK
         value: echo
       # ── Embeddings ────────────────────────────────────────────────────────
-      # Leave empty for LocalHashEmbedding (lexical, not semantic)
-      # Set to: openai (requires OPENAI_API_KEY)
       - key: EMBEDDING_PROVIDER
-        value: ""
+        value: openai
       - key: EMBEDDING_MODEL
         value: text-embedding-3-small
       - key: EMBEDDING_DIMENSIONS
         value: "1536"
+      - key: RATE_LIMIT_ADVISOR
+        value: 10/minute
+      - key: RATE_LIMIT_ORCHESTRATION
+        value: 20/minute
+      - key: RATE_LIMIT_COMPARE
+        value: 10/minute
       # ── RAG / Knowledge Base ──────────────────────────────────────────────
       - key: RAG_AUTO_INGEST
         value: "true"
@@ -81,8 +79,49 @@ services:
         value: "500"
       - key: RAG_CHUNK_OVERLAP
         value: "50"
-      # ── Providers and tools ───────────────────────────────────────────────
+      # ── Shipping Providers ────────────────────────────────────────────────
       - key: SHIPPING_PROVIDER
-        value: mock
+        value: fedex
+      - key: FEDEX_CLIENT_ID
+        sync: false
+      - key: FEDEX_CLIENT_SECRET
+        sync: false
+      - key: FEDEX_ACCOUNT_NUMBER
+        sync: false
+      - key: FEDEX_BASE_URL
+        value: https://apis-sandbox.fedex.com
+      - key: ENABLE_TOOLS
+        value: "true"
+
+  # ── MCP Tools Server ──────────────────────────────────────────────────────
+  # Exposes tool layer (validate_address, get_quote_preview) via MCP HTTP.
+  # Enables Claude Code, Spring Boot, and other MCP clients to call tools.
+  - type: web
+    name: shipsmart-mcp-tools
+    env: python
+    buildCommand: pip install uv && uv sync
+    startCommand: uv run uvicorn app.mcp_server:app --host 0.0.0.0 --port $PORT
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://shipsmart-web.onrender.com
+      - key: INTERNAL_JAVA_API_URL
+        value: https://shipsmart-api-java.onrender.com
+      # ── Shipping Providers ────────────────────────────────────────────────
+      - key: SHIPPING_PROVIDER
+        value: fedex
+      - key: FEDEX_CLIENT_ID
+        sync: false
+      - key: FEDEX_CLIENT_SECRET
+        sync: false
+      - key: FEDEX_ACCOUNT_NUMBER
+        sync: false
+      - key: FEDEX_BASE_URL
+        value: https://apis-sandbox.fedex.com
       - key: ENABLE_TOOLS
         value: "true"
