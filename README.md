@@ -18,8 +18,10 @@ multi-provider LLM router.
 | Shipping advisor | `POST /api/v1/advisor/shipping` | RAG + tool calls (`validate_address`, `get_quote_preview`) + LLM reasoning. |
 | Tracking advisor | `POST /api/v1/advisor/tracking` | RAG + optional address validation + LLM guidance. Extracts next-step list. |
 | Recommendation | `POST /api/v1/advisor/recommendation` | Deterministic scoring (cheapest/fastest/best_value/balanced). Hydrates from Java if `services` empty + `context.shipment_request_id` set. |
+| Compare | `POST /api/v1/compare` | Decision-cockpit: compares 2–3 shipping options across scenarios (on-time, damage, price, speed) using LLM reasoning. |
 | Tool orchestration | `POST /api/v1/orchestration/run` | Executes a registered tool. Auto-selects via regex first, then LLM-assisted fallback. |
 | Tool catalog | `GET /api/v1/orchestration/tools` | JSON Schemas for all registered tools. |
+| Service info | `GET /api/v1/info` | Returns service metadata (version, env, active providers). No secrets exposed. |
 | Health | `GET /health` | Liveness probe. |
 
 Interactive docs (dev only): `http://localhost:8000/docs`.
@@ -34,6 +36,7 @@ Interactive docs (dev only): `http://localhost:8000/docs`.
                           │  • shipping_advisor_service     │
                           │  • tracking_advisor_service     │
                           │  • recommendation_service       │
+                          │  • compare_service              │
                           │  • orchestration_service        │
                           │  • rag_service                  │
                           │  • java_client (→ Java API)     │
@@ -55,20 +58,27 @@ Interactive docs (dev only): `http://localhost:8000/docs`.
 | Path | Purpose |
 |---|---|
 | `app/main.py` | Lifespan: builds embedding provider, vector store (memory or pgvector), LLM router, shipping provider, tool registry. Auto-ingests on first boot. |
+| `app/mcp_server.py` | Standalone MCP HTTP server exposing tools (`validate_address`, `get_quote_preview`) for Claude Code and other MCP clients. |
 | `app/core/config.py` | All settings (env-driven via pydantic-settings). |
 | `app/core/cache.py` | TTL cache used by RAG, recommendation, and LLM tool selection. |
+| `app/core/errors.py` | Centralized error handling: `AppError` exception class + global exception handlers returning consistent JSON error responses. |
+| `app/core/logging.py` | Structured logging setup (`setup_logging()`) and named logger factory (`get_logger()`). |
+| `app/core/middleware.py` | `RequestLoggingMiddleware` — logs method, path, status, duration; attaches `X-Request-Id` header. |
 | `app/core/rate_limit.py` | Shared `slowapi` limiter (per IP). |
+| `app/schemas/` | Pydantic request/response models (`advisor.py`, `compare.py`). |
 | `app/llm/router.py` | Task-based router: each task → its own provider with fallback chain. |
 | `app/llm/client.py` | `OpenAIClient`, `AnthropicClient`, `GeminiClient`, `LlamaClient`, `EchoClient`. |
 | `app/rag/embeddings.py` | `OpenAIEmbedding` + `LocalHashEmbedding` placeholder. |
 | `app/rag/vector_store.py` | `VectorStore` ABC + `InMemoryVectorStore`. |
 | `app/rag/pgvector_store.py` | Postgres + pgvector implementation (asyncpg, cosine via `<=>`). |
 | `app/rag/ingestion.py` · `retrieval.py` | Chunking + retrieval pipeline. |
+| `app/services/compare_service.py` | LLM-driven multi-scenario shipping comparison logic. |
 | `app/services/orchestration_service.py` | Rule-based + LLM-assisted tool selection. |
 | `app/services/java_client.py` | Thin async wrapper around the shared `httpx` client → calls Java for `quotes` / `saved-options`. |
 | `app/providers/__init__.py` | Shipping provider factory. Loud WARN on mock; raises ValueError on missing carrier creds. |
 | `app/providers/{mock,ups,fedex,dhl,usps}_provider.py` | Real carrier providers are currently **stubs**; only `mock` returns data. |
 | `app/tools/` | Tool ABC, registry, address + quote tools. |
+| `scripts/perf_check.py` | Post-launch performance check: measures response times for key endpoints against thresholds. |
 
 ---
 
@@ -195,6 +205,7 @@ falling back. The actual carrier API integrations are currently stubs.
 ```env
 RATE_LIMIT_ADVISOR=10/minute       # /advisor/* endpoints
 RATE_LIMIT_ORCHESTRATION=20/minute # /orchestration/run
+RATE_LIMIT_COMPARE=10/minute       # /compare endpoint
 ```
 
 Per IP, via slowapi. Returns HTTP 429 when exceeded.
@@ -230,6 +241,60 @@ re-sending the quote list.
 
 If Java is unreachable, the call degrades gracefully — empty
 recommendations rather than a 500.
+
+---
+
+## MCP Server
+
+A standalone MCP HTTP server (`app/mcp_server.py`) exposes the tool
+registry over HTTP so that Claude Code, Spring Boot, and other MCP
+clients can discover and execute tools without going through the main
+FastAPI routes.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Liveness probe (includes tool count). |
+| `POST` | `/tools/list` | Returns MCP-compatible JSON Schemas for all registered tools. |
+| `POST` | `/tools/call` | Executes a tool by name with provided arguments. |
+| `GET` | `/` | Service discovery (name, version, tool count, endpoint list). |
+
+### Run locally
+
+```bash
+uv run uvicorn app.mcp_server:app --reload --host 0.0.0.0 --port 8001
+```
+
+### Quick test
+
+```bash
+# list available tools
+curl -X POST http://localhost:8001/tools/list
+
+# call a tool
+curl -X POST http://localhost:8001/tools/call \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"validate_address","arguments":{"street":"123 Main St","city":"NYC","state":"NY","zip_code":"10001"}}'
+```
+
+---
+
+## Deployment (Render)
+
+The repo ships a `render.yaml` Render Blueprint that deploys **two
+services** from this codebase:
+
+| Service | Entry point | Purpose |
+|---|---|---|
+| `shipsmart-api-python` | `app.main:app` | Main FastAPI AI/advisory service. |
+| `shipsmart-mcp-tools` | `app.mcp_server:app` | MCP tools server for external tool consumers. |
+
+Both services use `pip install uv && uv sync` as the build command.
+
+To deploy: connect the repo to Render and apply the Blueprint. Set all
+`sync: false` env vars (secrets like `DATABASE_URL`, `OPENAI_API_KEY`)
+in the Render dashboard before the first deploy.
 
 ---
 
