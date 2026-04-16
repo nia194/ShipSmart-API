@@ -5,7 +5,7 @@ transactional data; provides RAG-grounded shipping advice, tracking
 guidance, recommendation scoring, and tool orchestration on top of a
 multi-provider LLM router.
 
-**Stack:** FastAPI 0.135 · Python 3.13 · uv · pgvector · slowapi · OpenAI / Anthropic / Gemini / Ollama / Echo
+**Stack:** FastAPI 0.135.3 · Python 3.13 · uv · pgvector · slowapi · OpenAI / Anthropic / Gemini / Ollama / Echo
 
 ---
 
@@ -45,19 +45,20 @@ Interactive docs (dev only): `http://localhost:8000/docs`.
                        ┌─────▼────┐ ┌──────▼─────┐ ┌─────▼─────┐
                        │ RAG      │ │ Tools      │ │ LLM       │
                        │ • embed  │ │ • registry │ │ • router  │
-                       │ • store  │ │ • validate │ │ • openai  │
-                       │   (pgvec │ │ • quote    │ │ • claude  │
+                       │ • store  │ │ • validate │ │ • prompts │
+                       │   (pgvec │ │ • quote    │ │ • openai  │
+                       │   /mcp   │ │            │ │ • claude  │
                        │   /mem)  │ │            │ │ • gemini  │
-                       │ • retrv  │ │            │ │ • llama   │
-                       └──────────┘ └────────────┘ │ • echo    │
-                                                   └───────────┘
+                       │ • chunk  │ │            │ │ • llama   │
+                       │ • retrv  │ │            │ │ • echo    │
+                       └──────────┘ └────────────┘ └───────────┘
 ```
 
 ### Key modules
 
 | Path | Purpose |
 |---|---|
-| `app/main.py` | Lifespan: builds embedding provider, vector store (memory or pgvector), LLM router, shipping provider, tool registry. Auto-ingests on first boot. |
+| `app/main.py` | Lifespan: builds embedding provider, vector store (memory, pgvector, or mcp), LLM router, shipping provider, tool registry. Auto-ingests on first boot. |
 | `app/mcp_server.py` | Standalone MCP HTTP server exposing tools (`validate_address`, `get_quote_preview`) for Claude Code and other MCP clients. |
 | `app/core/config.py` | All settings (env-driven via pydantic-settings). |
 | `app/core/cache.py` | TTL cache used by RAG, recommendation, and LLM tool selection. |
@@ -68,15 +69,21 @@ Interactive docs (dev only): `http://localhost:8000/docs`.
 | `app/schemas/` | Pydantic request/response models (`advisor.py`, `compare.py`). |
 | `app/llm/router.py` | Task-based router: each task → its own provider with fallback chain. |
 | `app/llm/client.py` | `OpenAIClient`, `AnthropicClient`, `GeminiClient`, `LlamaClient`, `EchoClient`. |
+| `app/llm/prompts.py` | Prompt templates for RAG queries and advisor flows (system instructions, context formatting). |
 | `app/rag/embeddings.py` | `OpenAIEmbedding` + `LocalHashEmbedding` placeholder. |
 | `app/rag/vector_store.py` | `VectorStore` ABC + `InMemoryVectorStore`. |
 | `app/rag/pgvector_store.py` | Postgres + pgvector implementation (asyncpg, cosine via `<=>`). |
-| `app/rag/ingestion.py` · `retrieval.py` | Chunking + retrieval pipeline. |
+| `app/rag/mcp_vector_store.py` | MCP-based pgvector store via Supabase MCP server (alternative to direct asyncpg). |
+| `app/rag/chunking.py` | Document chunking: splits text into overlapping chunks for embedding. |
+| `app/rag/ingestion.py` · `retrieval.py` | Ingestion + retrieval pipeline. |
 | `app/services/compare_service.py` | LLM-driven multi-scenario shipping comparison logic. |
 | `app/services/orchestration_service.py` | Rule-based + LLM-assisted tool selection. |
 | `app/services/java_client.py` | Thin async wrapper around the shared `httpx` client → calls Java for `quotes` / `saved-options`. |
 | `app/providers/__init__.py` | Shipping provider factory. Loud WARN on mock; raises ValueError on missing carrier creds. |
+| `app/providers/base.py` | Base provider interface (ABC for all external service providers). |
+| `app/providers/shipping_provider.py` | Shipping provider abstraction (carrier-facing operations interface). |
 | `app/providers/{mock,ups,fedex,dhl,usps}_provider.py` | Real carrier providers are currently **stubs**; only `mock` returns data. |
+| `app/dependencies/__init__.py` | FastAPI dependency injection providers (`Depends()` helpers). |
 | `app/tools/` | Tool ABC, registry, address + quote tools. |
 | `scripts/perf_check.py` | Post-launch performance check: measures response times for key endpoints against thresholds. |
 
@@ -165,40 +172,80 @@ LLAMA_MODEL=llama3.2
 ```env
 EMBEDDING_PROVIDER=            # "openai" or empty (= LocalHashEmbedding placeholder)
 EMBEDDING_MODEL=text-embedding-3-small
-EMBEDDING_DIMENSIONS=256
+EMBEDDING_DIMENSIONS=1536
 ```
 
-### Vector store (pgvector)
+### Vector store
 
 ```env
-VECTOR_STORE_TYPE=memory       # "memory" or "pgvector"
+VECTOR_STORE_TYPE=memory       # "memory", "pgvector", or "mcp"
 DATABASE_URL=                  # required when VECTOR_STORE_TYPE=pgvector
 PGVECTOR_TABLE=rag_chunks
-RAG_AUTO_INGEST=true
 ```
 
-To enable persistent RAG:
+**pgvector** — direct asyncpg connection to Postgres + pgvector:
 
-1. Apply the migration `supabase/migrations/20260408034204_create_rag_chunks.sql` (or `supabase db push`).
+1. Create a `rag_chunks` table with a `vector(1536)` embedding column (matching `text-embedding-3-small`). If you use a different embedding dimension, alter the column accordingly.
 2. Set `VECTOR_STORE_TYPE=pgvector` and `DATABASE_URL=postgresql://…`.
 3. Restart. The first boot auto-ingests `data/documents/*` if the table is empty.
 
-Note: the migration's `embedding` column is `vector(1536)` to match
-OpenAI `text-embedding-3-small`. If you use a different embedding
-dimension, alter the column accordingly.
+**mcp** — connects to Supabase pgvector through an MCP HTTP endpoint instead of direct asyncpg:
+
+```env
+MCP_SERVER_URL=               # MCP server HTTP endpoint (required for "mcp" backend)
+MCP_API_KEY=                  # Optional API key for MCP server auth
+```
+
+### RAG settings
+
+```env
+RAG_AUTO_INGEST=true           # auto-ingest data/documents/* on startup if store is empty
+RAG_DOCUMENTS_PATH=data/documents
+RAG_TOP_K=3                    # number of chunks returned per similarity search
+RAG_CHUNK_SIZE=500             # characters per chunk
+RAG_CHUNK_OVERLAP=50           # overlap between consecutive chunks
+```
 
 ### Shipping provider
 
 ```env
 SHIPPING_PROVIDER=mock         # mock | ups | fedex | dhl | usps
+
+# UPS
+UPS_CLIENT_ID=
+UPS_CLIENT_SECRET=
+UPS_ACCOUNT_NUMBER=
+UPS_BASE_URL=https://onlinetools.ups.com
+
+# FedEx
+FEDEX_CLIENT_ID=
+FEDEX_CLIENT_SECRET=
+FEDEX_ACCOUNT_NUMBER=
+FEDEX_BASE_URL=https://apis.fedex.com       # sandbox: https://apis-sandbox.fedex.com
+
+# DHL
+DHL_API_KEY=
+DHL_API_SECRET=
+DHL_ACCOUNT_NUMBER=
+DHL_BASE_URL=https://express.api.dhl.com
+
+# USPS
+USPS_CLIENT_ID=
+USPS_CLIENT_SECRET=
+USPS_BASE_URL=https://api.usps.com
 ```
 
 `mock` is the default and returns deterministic fake quotes/addresses
 with a loud WARNING at boot. Selecting a real carrier (`ups`/`fedex`/
-`dhl`/`usps`) **requires all of that carrier's env vars** (e.g.
-`UPS_CLIENT_ID`, `UPS_CLIENT_SECRET`, `UPS_ACCOUNT_NUMBER`); the factory
+`dhl`/`usps`) **requires all of that carrier's env vars**; the factory
 raises `ValueError` at startup listing missing keys instead of silently
 falling back. The actual carrier API integrations are currently stubs.
+
+### Tools
+
+```env
+ENABLE_TOOLS=true              # enable/disable tool registry
+```
 
 ### Rate limiting
 
