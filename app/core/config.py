@@ -83,34 +83,12 @@ class Settings(BaseSettings):
     rate_limit_orchestration: str = "20/minute"
     rate_limit_compare: str = "10/minute"
 
-    # ── Providers ────────────────────────────────────────────────────────────
-    shipping_provider: str = "mock"  # "mock", "ups", "fedex", "dhl", "usps"
-
-    # ── UPS ──────────────────────────────────────────────────────────────────
-    ups_client_id: str = ""
-    ups_client_secret: str = ""
-    ups_account_number: str = ""
-    ups_base_url: str = "https://onlinetools.ups.com"
-
-    # ── FedEx ────────────────────────────────────────────────────────────────
-    fedex_client_id: str = ""
-    fedex_client_secret: str = ""
-    fedex_account_number: str = ""
-    fedex_base_url: str = "https://apis.fedex.com"
-
-    # ── DHL ──────────────────────────────────────────────────────────────────
-    dhl_api_key: str = ""
-    dhl_api_secret: str = ""
-    dhl_account_number: str = ""
-    dhl_base_url: str = "https://express.api.dhl.com"
-
-    # ── USPS ─────────────────────────────────────────────────────────────────
-    usps_client_id: str = ""
-    usps_client_secret: str = ""
-    usps_base_url: str = "https://api.usps.com"
-
-    # ── Tools ─────────────────────────────────────────────────────────────────
-    enable_tools: bool = True
+    # ── ShipSmart MCP (tool server) ──────────────────────────────────────────
+    # HTTP endpoint of the standalone ShipSmart-MCP service. Empty = no tools
+    # (advisor/orchestration routes return 503).
+    shipsmart_mcp_url: str = ""
+    # Optional shared secret sent as X-MCP-Api-Key when calling the MCP server.
+    shipsmart_mcp_api_key: str = ""
 
     # ── RAG ───────────────────────────────────────────────────────────────────
     rag_provider: str = ""

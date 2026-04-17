@@ -24,13 +24,10 @@ from app.core.logging import get_logger, setup_logging
 from app.core.middleware import RequestLoggingMiddleware
 from app.core.rate_limit import limiter
 from app.llm.router import TASK_SYNTHESIS, create_llm_router
-from app.providers import create_shipping_provider
 from app.rag.embeddings import LocalHashEmbedding, create_embedding_provider
 from app.rag.ingestion import ingest_documents, load_documents
 from app.rag.vector_store import VectorStore, create_vector_store
-from app.tools.address_tools import ValidateAddressTool
-from app.tools.quote_tools import GetQuotePreviewTool
-from app.tools.registry import ToolRegistry
+from app.services.mcp_client import create_remote_registry
 
 setup_logging()
 logger = get_logger(__name__)
@@ -107,16 +104,32 @@ async def lifespan(app: FastAPI):
     logger.info("RAG pipeline initialized (embedding=%s)",
                 type(embedding_provider).__name__)
 
-    # Tool registry and provider (factory reads SHIPPING_PROVIDER from config)
-    shipping_provider = create_shipping_provider()
-    tool_registry = ToolRegistry()
-    tool_registry.register(ValidateAddressTool(shipping_provider))
-    tool_registry.register(GetQuotePreviewTool(shipping_provider))
+    # Remote tool registry — hydrated from the standalone ShipSmart-MCP
+    # service. If SHIPSMART_MCP_URL is not configured, the advisor and
+    # orchestration routes will return 503 until it is set.
+    tool_registry = None
+    if settings.shipsmart_mcp_url:
+        try:
+            tool_registry = await create_remote_registry(
+                base_url=settings.shipsmart_mcp_url,
+                api_key=settings.shipsmart_mcp_api_key,
+            )
+            logger.info(
+                "Remote tool registry hydrated from MCP %s (%d tools)",
+                settings.shipsmart_mcp_url, tool_registry.count(),
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to hydrate remote tool registry from %s: %s. "
+                "Advisor/orchestration routes will return 503.",
+                settings.shipsmart_mcp_url, exc,
+            )
+    else:
+        logger.warning(
+            "SHIPSMART_MCP_URL is not set — advisor/orchestration routes "
+            "will return 503 until it is configured."
+        )
     app.state.tool_registry = tool_registry
-    logger.info(
-        "Tool registry initialized: %d tools, provider=%s",
-        tool_registry.count(), shipping_provider.name,
-    )
 
     yield
 
@@ -125,6 +138,11 @@ async def lifespan(app: FastAPI):
             await vector_store.disconnect()  # type: ignore[attr-defined]
         except Exception as exc:
             logger.warning("Vector store disconnect failed: %s", exc)
+    if tool_registry is not None:
+        try:
+            await tool_registry.aclose()
+        except Exception as exc:
+            logger.warning("Remote tool registry close failed: %s", exc)
     await app.state.http_client.aclose()
     logger.info("Shutting down %s", settings.app_name)
 
