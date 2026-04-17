@@ -1,6 +1,9 @@
 """
 Integration tests for full system flows.
 Tests the combination of RAG + tools + LLM + recommendations.
+
+Tool calls are served by a MockTransport-backed `RemoteToolRegistry` — no
+live ShipSmart-MCP service required.
 """
 
 import asyncio
@@ -10,13 +13,11 @@ from fastapi.testclient import TestClient
 
 from app.llm.client import create_llm_client
 from app.main import app
-from app.providers.mock_provider import MockShippingProvider
 from app.rag.embeddings import create_embedding_provider
 from app.rag.ingestion import ingest_documents, load_documents
 from app.rag.vector_store import create_vector_store
-from app.tools.address_tools import ValidateAddressTool
-from app.tools.quote_tools import GetQuotePreviewTool
-from app.tools.registry import ToolRegistry
+from app.services.mcp_client import create_remote_registry
+from tests.conftest import build_mcp_mock_transport
 
 
 @pytest.fixture(autouse=True)
@@ -33,11 +34,15 @@ def _setup_app_state():
         "llm_client": llm_client,
     }
 
-    # Tools
-    provider = MockShippingProvider()
-    registry = ToolRegistry()
-    registry.register(ValidateAddressTool(provider))
-    registry.register(GetQuotePreviewTool(provider))
+    # Tools — hydrate RemoteToolRegistry from a MockTransport
+    transport = build_mcp_mock_transport()
+    registry = asyncio.run(
+        create_remote_registry(
+            base_url="http://mcp.test",
+            api_key="",
+            transport=transport,
+        )
+    )
     app.state.tool_registry = registry
 
     # Ingest documents
@@ -54,7 +59,9 @@ def _setup_app_state():
 
     asyncio.run(ingest())
     yield
+    asyncio.run(registry.aclose())
     asyncio.run(vector_store.clear())
+    app.state.tool_registry = None
 
 
 client = TestClient(app)
