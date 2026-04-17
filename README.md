@@ -58,8 +58,8 @@ Interactive docs (dev only): `http://localhost:8000/docs`.
 
 | Path | Purpose |
 |---|---|
-| `app/main.py` | Lifespan: builds embedding provider, vector store (memory, pgvector, or mcp), LLM router, shipping provider, tool registry. Auto-ingests on first boot. |
-| `app/mcp_server.py` | Standalone MCP HTTP server exposing tools (`validate_address`, `get_quote_preview`) for Claude Code and other MCP clients. |
+| `app/main.py` | Lifespan: builds embedding provider, vector store (memory, pgvector, or mcp), LLM router, and the remote `RemoteToolRegistry` backed by the ShipSmart-MCP service. Auto-ingests on first boot. |
+| `app/services/mcp_client.py` | Thin HTTP client for the standalone ShipSmart-MCP server, plus `RemoteTool` / `RemoteToolRegistry` shims that ducktype the old in-process tool interface. |
 | `app/core/config.py` | All settings (env-driven via pydantic-settings). |
 | `app/core/cache.py` | TTL cache used by RAG, recommendation, and LLM tool selection. |
 | `app/core/errors.py` | Centralized error handling: `AppError` exception class + global exception handlers returning consistent JSON error responses. |
@@ -79,13 +79,12 @@ Interactive docs (dev only): `http://localhost:8000/docs`.
 | `app/services/compare_service.py` | LLM-driven multi-scenario shipping comparison logic. |
 | `app/services/orchestration_service.py` | Rule-based + LLM-assisted tool selection. |
 | `app/services/java_client.py` | Thin async wrapper around the shared `httpx` client → calls Java for `quotes` / `saved-options`. |
-| `app/providers/__init__.py` | Shipping provider factory. Loud WARN on mock; raises ValueError on missing carrier creds. |
-| `app/providers/base.py` | Base provider interface (ABC for all external service providers). |
-| `app/providers/shipping_provider.py` | Shipping provider abstraction (carrier-facing operations interface). |
-| `app/providers/{mock,ups,fedex,dhl,usps}_provider.py` | Real carrier providers are currently **stubs**; only `mock` returns data. |
 | `app/dependencies/__init__.py` | FastAPI dependency injection providers (`Depends()` helpers). |
-| `app/tools/` | Tool ABC, registry, address + quote tools. |
 | `scripts/perf_check.py` | Post-launch performance check: measures response times for key endpoints against thresholds. |
+
+> Tools and carrier providers no longer live in this repo. They are served by
+> the standalone **ShipSmart-MCP** service — see the [MCP Server](#mcp-server-separate-repo)
+> section below.
 
 ---
 
@@ -121,13 +120,14 @@ The boot logs are intentionally loud about degraded modes:
 WARNING  EMBEDDING_PROVIDER unset — using LocalHashEmbedding…
 INFO     Vector store backend: memory (InMemoryVectorStore)
 WARNING  Task 'reasoning' provider='<unset>' unavailable — falling back to echo
-WARNING  SHIPPING_PROVIDER=mock — All quote previews… return FAKE data.
-INFO     Tool registry initialized: 2 tools, provider=mock
+WARNING  SHIPSMART_MCP_URL is not set — advisor/orchestration routes will return 503…
+INFO     Remote tool registry hydrated from MCP http://localhost:8001 (N tools)
 ```
 
-If you see all four warnings, the server still works end-to-end but is
-running on placeholder data + placeholder LLM. Set the env vars below to
-unlock real behavior.
+If you see the first three warnings plus "no MCP URL", the server still
+boots but the `/advisor/*` and `/orchestration/*` routes return 503 until
+you point `SHIPSMART_MCP_URL` at a live ShipSmart-MCP instance. Set the
+env vars below to unlock real behavior.
 
 ---
 
@@ -208,44 +208,22 @@ RAG_CHUNK_OVERLAP=50           # overlap between consecutive chunks
 
 ### Shipping provider
 
-```env
-SHIPPING_PROVIDER=mock         # mock | ups | fedex | dhl | usps
+Carrier credentials (`SHIPPING_PROVIDER`, `UPS_*`, `FEDEX_*`, `DHL_*`,
+`USPS_*`) no longer live in this service. They belong to the
+**ShipSmart-MCP** repo, which owns all carrier-API calls. Configure
+them there and point this service at its HTTP endpoint with
+`SHIPSMART_MCP_URL` (below).
 
-# UPS
-UPS_CLIENT_ID=
-UPS_CLIENT_SECRET=
-UPS_ACCOUNT_NUMBER=
-UPS_BASE_URL=https://onlinetools.ups.com
-
-# FedEx
-FEDEX_CLIENT_ID=
-FEDEX_CLIENT_SECRET=
-FEDEX_ACCOUNT_NUMBER=
-FEDEX_BASE_URL=https://apis.fedex.com       # sandbox: https://apis-sandbox.fedex.com
-
-# DHL
-DHL_API_KEY=
-DHL_API_SECRET=
-DHL_ACCOUNT_NUMBER=
-DHL_BASE_URL=https://express.api.dhl.com
-
-# USPS
-USPS_CLIENT_ID=
-USPS_CLIENT_SECRET=
-USPS_BASE_URL=https://api.usps.com
-```
-
-`mock` is the default and returns deterministic fake quotes/addresses
-with a loud WARNING at boot. Selecting a real carrier (`ups`/`fedex`/
-`dhl`/`usps`) **requires all of that carrier's env vars**; the factory
-raises `ValueError` at startup listing missing keys instead of silently
-falling back. The actual carrier API integrations are currently stubs.
-
-### Tools
+### Tools (delegated to ShipSmart-MCP)
 
 ```env
-ENABLE_TOOLS=true              # enable/disable tool registry
+SHIPSMART_MCP_URL=http://localhost:8001   # standalone MCP tool server
+SHIPSMART_MCP_API_KEY=                    # optional; must match MCP_API_KEY on the server
 ```
+
+If `SHIPSMART_MCP_URL` is empty, the advisor and orchestration routes
+return HTTP 503 (no tools available). See the **ShipSmart-MCP** repo for
+how to run the tool server locally.
 
 ### Rate limiting
 
@@ -291,53 +269,42 @@ recommendations rather than a 500.
 
 ---
 
-## MCP Server
+## MCP Server (separate repo)
 
-A standalone MCP HTTP server (`app/mcp_server.py`) exposes the tool
-registry over HTTP so that Claude Code, Spring Boot, and other MCP
-clients can discover and execute tools without going through the main
-FastAPI routes.
+The tool layer (`validate_address`, `get_quote_preview`, carrier
+providers, MCP HTTP endpoints) lives in the separate **ShipSmart-MCP**
+repo and is deployed as its own Render service.
 
-### Endpoints
+This API calls that service through `app/services/mcp_client.py`:
 
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/health` | Liveness probe (includes tool count). |
-| `POST` | `/tools/list` | Returns MCP-compatible JSON Schemas for all registered tools. |
-| `POST` | `/tools/call` | Executes a tool by name with provided arguments. |
-| `GET` | `/` | Service discovery (name, version, tool count, endpoint list). |
+- `McpClient` — async HTTP client for `/tools/list` and `/tools/call`.
+- `RemoteTool` / `RemoteToolRegistry` — shims that implement the same
+  interface the in-process tool layer used to expose, so
+  `orchestration_service`, `shipping_advisor_service`, and
+  `tracking_advisor_service` are unchanged.
 
-### Run locally
+Contract (defined by ShipSmart-MCP):
 
-```bash
-uv run uvicorn app.mcp_server:app --reload --host 0.0.0.0 --port 8001
-```
+| Method | Path          | Purpose                                              |
+|--------|---------------|------------------------------------------------------|
+| `GET`  | `/health`     | Liveness probe.                                      |
+| `POST` | `/tools/list` | MCP tool catalog as JSON Schemas.                    |
+| `POST` | `/tools/call` | Execute a tool by name.                              |
 
-### Quick test
-
-```bash
-# list available tools
-curl -X POST http://localhost:8001/tools/list
-
-# call a tool
-curl -X POST http://localhost:8001/tools/call \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"validate_address","arguments":{"street":"123 Main St","city":"NYC","state":"NY","zip_code":"10001"}}'
-```
+If `MCP_API_KEY` is set on the MCP server, set the matching
+`SHIPSMART_MCP_API_KEY` here so requests pass the `X-MCP-Api-Key` header.
 
 ---
 
 ## Deployment (Render)
 
-The repo ships a `render.yaml` Render Blueprint that deploys **two
-services** from this codebase:
+The repo ships a `render.yaml` Render Blueprint for a single service:
 
 | Service | Entry point | Purpose |
 |---|---|---|
-| `shipsmart-api-python` | `app.main:app` | Main FastAPI AI/advisory service. |
-| `shipsmart-mcp-tools` | `app.mcp_server:app` | MCP tools server for external tool consumers. |
+| `shipsmart-api-python` | `app.main:app` | FastAPI AI/advisory service. Tools are delegated to the `shipsmart-mcp` service deployed from the ShipSmart-MCP repo. |
 
-Both services use `pip install uv && uv sync` as the build command.
+Build command: `pip install uv && uv sync`.
 
 To deploy: connect the repo to Render and apply the Blueprint. Set all
 `sync: false` env vars (secrets like `DATABASE_URL`, `OPENAI_API_KEY`)
@@ -383,6 +350,7 @@ Tests live under `tests/` and use `pytest-asyncio` (async mode = auto).
 
 - **Rate limit 429**: someone is hammering an `/advisor` endpoint. Tune `RATE_LIMIT_ADVISOR` if legitimate.
 - **Echo responses**: no LLM provider keys are set. Set `OPENAI_API_KEY` + `LLM_PROVIDER_REASONING=openai` (or equivalent) to enable real completions.
-- **`is_valid: true` for any address**: you're on the mock provider. Set `SHIPPING_PROVIDER` + carrier credentials.
+- **`is_valid: true` for any address**: the MCP server is running on the mock carrier. Switch `SHIPPING_PROVIDER` on the **ShipSmart-MCP** service to a real carrier (it owns those env vars now).
+- **`/advisor/*` or `/orchestration/*` return 503**: `SHIPSMART_MCP_URL` is empty or the MCP server is unreachable. Boot `ShipSmart-MCP` and re-check.
 - **RAG returns nothing relevant**: you're on `LocalHashEmbedding`. Set `EMBEDDING_PROVIDER=openai`.
 - **RAG cleared on restart**: you're on `VECTOR_STORE_TYPE=memory`. Switch to `pgvector` + `DATABASE_URL`.

@@ -1,20 +1,20 @@
-"""Tests for advisor services (RAG + tool + LLM combination)."""
+"""Tests for advisor services (RAG + tool + LLM combination).
+
+Tool execution now runs against a `RemoteToolRegistry` backed by
+`httpx.MockTransport` — see `tests/conftest.py::mcp_tool_registry`.
+"""
 
 import asyncio
 
 import pytest
 
 from app.llm.client import create_llm_client
-from app.providers.mock_provider import MockShippingProvider
 from app.rag.embeddings import create_embedding_provider
 from app.rag.ingestion import ingest_documents, load_documents
 from app.rag.vector_store import create_vector_store
 from app.services.recommendation_service import generate_recommendations
 from app.services.shipping_advisor_service import get_shipping_advice
 from app.services.tracking_advisor_service import get_tracking_guidance
-from app.tools.address_tools import ValidateAddressTool
-from app.tools.quote_tools import GetQuotePreviewTool
-from app.tools.registry import ToolRegistry
 
 
 @pytest.fixture
@@ -48,20 +48,10 @@ def rag_state():
     asyncio.run(vector_store.clear())
 
 
-@pytest.fixture
-def tool_registry():
-    """Set up tool registry."""
-    provider = MockShippingProvider()
-    registry = ToolRegistry()
-    registry.register(ValidateAddressTool(provider))
-    registry.register(GetQuotePreviewTool(provider))
-    return registry
-
-
 # ── Shipping Advisor ──────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_shipping_advice_with_tools(rag_state, tool_registry):
+async def test_shipping_advice_with_tools(rag_state, mcp_tool_registry):
     """Test shipping advice with tool execution."""
     advice = await get_shipping_advice(
         query="What are the shipping options for this package?",
@@ -76,7 +66,7 @@ async def test_shipping_advice_with_tools(rag_state, tool_registry):
         embedding_provider=rag_state["embedding_provider"],
         vector_store=rag_state["vector_store"],
         llm_client=rag_state["llm_client"],
-        tool_registry=tool_registry,
+        tool_registry=mcp_tool_registry,
     )
     assert "get_quote_preview" in advice.tools_used
     assert advice.answer
@@ -85,7 +75,7 @@ async def test_shipping_advice_with_tools(rag_state, tool_registry):
 
 
 @pytest.mark.asyncio
-async def test_shipping_advice_address_validation(rag_state, tool_registry):
+async def test_shipping_advice_address_validation(rag_state, mcp_tool_registry):
     """Test shipping advice with address validation."""
     advice = await get_shipping_advice(
         query="Validate this address",
@@ -98,7 +88,7 @@ async def test_shipping_advice_address_validation(rag_state, tool_registry):
         embedding_provider=rag_state["embedding_provider"],
         vector_store=rag_state["vector_store"],
         llm_client=rag_state["llm_client"],
-        tool_registry=tool_registry,
+        tool_registry=mcp_tool_registry,
     )
     assert "validate_address" in advice.tools_used
     assert advice.answer
@@ -121,14 +111,14 @@ async def test_shipping_advice_rag_only(rag_state):
 # ── Tracking Advisor ──────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_tracking_guidance_rag_focused(rag_state, tool_registry):
+async def test_tracking_guidance_rag_focused(rag_state, mcp_tool_registry):
     """Test tracking guidance (mostly RAG-driven)."""
     guidance = await get_tracking_guidance(
         issue="What should I do if my package is delayed?",
         embedding_provider=rag_state["embedding_provider"],
         vector_store=rag_state["vector_store"],
         llm_client=rag_state["llm_client"],
-        tool_registry=tool_registry,
+        tool_registry=mcp_tool_registry,
     )
     assert guidance.guidance
     assert guidance.issue_summary
@@ -137,7 +127,7 @@ async def test_tracking_guidance_rag_focused(rag_state, tool_registry):
 
 
 @pytest.mark.asyncio
-async def test_tracking_guidance_with_address(rag_state, tool_registry):
+async def test_tracking_guidance_with_address(rag_state, mcp_tool_registry):
     """Test tracking guidance with address validation."""
     guidance = await get_tracking_guidance(
         issue="Package not being delivered to my apartment",
@@ -150,7 +140,7 @@ async def test_tracking_guidance_with_address(rag_state, tool_registry):
         embedding_provider=rag_state["embedding_provider"],
         vector_store=rag_state["vector_store"],
         llm_client=rag_state["llm_client"],
-        tool_registry=tool_registry,
+        tool_registry=mcp_tool_registry,
     )
     assert guidance.guidance
     # May or may not use validate_address depending on LLM

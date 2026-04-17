@@ -20,8 +20,8 @@ from app.llm.client import LLMClient
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.retrieval import retrieve
 from app.rag.vector_store import SearchResult, VectorStore
+from app.services.mcp_client import RemoteToolRegistry as ToolRegistry
 from app.services.orchestration_service import execute_tool
-from app.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 

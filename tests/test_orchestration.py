@@ -1,24 +1,36 @@
-"""Tests for orchestration endpoint and service."""
+"""Tests for orchestration endpoint and service.
+
+The tool layer now lives in the standalone ShipSmart-MCP service. These tests
+wire `app.state.tool_registry` to a `RemoteToolRegistry` backed by an
+`httpx.MockTransport` (see `tests/conftest.py`) so no real MCP server is
+needed for the suite.
+"""
+
+import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.providers.mock_provider import MockShippingProvider
-from app.tools.address_tools import ValidateAddressTool
-from app.tools.quote_tools import GetQuotePreviewTool
-from app.tools.registry import ToolRegistry
+from app.services.mcp_client import create_remote_registry
+from tests.conftest import build_mcp_mock_transport
 
 
 @pytest.fixture(autouse=True)
 def _setup_tool_registry():
-    """Initialize tool registry for tests (lifespan doesn't run with TestClient)."""
-    provider = MockShippingProvider()
-    registry = ToolRegistry()
-    registry.register(ValidateAddressTool(provider))
-    registry.register(GetQuotePreviewTool(provider))
+    """Hydrate `app.state.tool_registry` from a MockTransport for each test."""
+    transport = build_mcp_mock_transport()
+    registry = asyncio.run(
+        create_remote_registry(
+            base_url="http://mcp.test",
+            api_key="",
+            transport=transport,
+        )
+    )
     app.state.tool_registry = registry
     yield
+    asyncio.run(registry.aclose())
+    app.state.tool_registry = None
 
 
 client = TestClient(app)
