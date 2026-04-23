@@ -14,6 +14,8 @@ from typing import Any
 
 import httpx
 
+from app.core.correlation import outbound_headers
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,7 +32,7 @@ class JavaApiClient:
 
         Returns the parsed `services` array or None on failure.
         """
-        headers: dict[str, str] = {}
+        headers: dict[str, str] = outbound_headers()
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
         try:
@@ -66,10 +68,12 @@ class JavaApiClient:
         """
         if not auth_token:
             return None
+        headers = outbound_headers()
+        headers["Authorization"] = f"Bearer {auth_token}"
         try:
             resp = await self._client.get(
                 "/api/v1/saved-options",
-                headers={"Authorization": f"Bearer {auth_token}"},
+                headers=headers,
             )
         except httpx.HTTPError as exc:
             logger.warning("JavaApiClient.get_saved_options network error: %s", exc)
