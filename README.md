@@ -64,7 +64,8 @@ Interactive docs (dev only): `http://localhost:8000/docs`.
 | `app/core/cache.py` | TTL cache used by RAG, recommendation, and LLM tool selection. |
 | `app/core/errors.py` | Centralized error handling: `AppError` exception class + global exception handlers returning consistent JSON error responses. |
 | `app/core/logging.py` | Structured logging setup (`setup_logging()`) and named logger factory (`get_logger()`). |
-| `app/core/middleware.py` | `RequestLoggingMiddleware` — logs method, path, status, duration; attaches `X-Request-Id` header. |
+| `app/core/middleware.py` | `RequestLoggingMiddleware` — logs method, path, status, duration; honors inbound `X-Request-Id` and W3C `traceparent` (mints them when missing), stores them in ContextVars, and echoes both back as response headers. |
+| `app/core/correlation.py` | ContextVars (`request_id_var`, `traceparent_var`) + `outbound_headers()` helper. Lets outbound clients (Java API, MCP) forward the same correlation IDs on every hop. |
 | `app/core/rate_limit.py` | Shared `slowapi` limiter (per IP). |
 | `app/schemas/` | Pydantic request/response models (`advisor.py`, `compare.py`). |
 | `app/llm/router.py` | Task-based router: each task → its own provider with fallback chain. |
@@ -78,7 +79,7 @@ Interactive docs (dev only): `http://localhost:8000/docs`.
 | `app/rag/ingestion.py` · `retrieval.py` | Ingestion + retrieval pipeline. |
 | `app/services/compare_service.py` | LLM-driven multi-scenario shipping comparison logic. |
 | `app/services/orchestration_service.py` | Rule-based + LLM-assisted tool selection. |
-| `app/services/java_client.py` | Thin async wrapper around the shared `httpx` client → calls Java for `quotes` / `saved-options`. |
+| `app/services/java_client.py` | Thin async wrapper around the shared `httpx` client → calls Java for `quotes` / `saved-options`. Forwards `X-Request-Id` / `traceparent` via `outbound_headers()` so requests stay correlated across the Java hop. |
 | `app/dependencies/__init__.py` | FastAPI dependency injection providers (`Depends()` helpers). |
 | `scripts/perf_check.py` | Post-launch performance check: measures response times for key endpoints against thresholds. |
 
