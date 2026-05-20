@@ -1,11 +1,86 @@
 # ShipSmart — FastAPI AI Service (`api-python`)
 
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.135.3-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![uv](https://img.shields.io/badge/uv-0.6%2B-DE5FE9?logo=python&logoColor=white)](https://docs.astral.sh/uv/)
+[![pgvector](https://img.shields.io/badge/pgvector-Postgres-336791?logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
+[![Deploy: Render](https://img.shields.io/badge/Deploy-Render-46E3B7?logo=render&logoColor=white)](https://render.com/)
+[![License](https://img.shields.io/badge/License-See%20LICENSE-blue)](./LICENSE)
+
 AI / orchestration service for the ShipSmart shipping platform. Owns no
 transactional data; provides RAG-grounded shipping advice, tracking
 guidance, recommendation scoring, and tool orchestration on top of a
 multi-provider LLM router.
 
 **Stack:** FastAPI 0.135.3 · Python 3.13 · uv · pgvector · slowapi · OpenAI / Anthropic / Gemini / Ollama / Echo
+
+---
+
+## Table of contents
+
+- [The ShipSmart ecosystem](#the-shipsmart-ecosystem)
+- [What this service does](#what-this-service-does)
+- [Architecture inside this service](#architecture-inside-this-service)
+- [Running locally](#running-locally)
+- [Environment variables](#environment-variables)
+- [Tool orchestration: how selection works](#tool-orchestration-how-selection-works)
+- [Recommendations + Java hydration](#recommendations--java-hydration)
+- [MCP Server (separate repo)](#mcp-server-separate-repo)
+- [Deployment (Render)](#deployment-render)
+- [Smoke tests](#smoke-tests)
+- [Tests](#tests)
+- [Cross-service contracts](#cross-service-contracts)
+- [Operational notes](#operational-notes)
+- [License](#license)
+
+---
+
+## The ShipSmart ecosystem
+
+This service is one of five sibling repositories. Clone them as
+siblings of this directory when working on the full system.
+
+| Repo | Role | Stack |
+|------|------|-------|
+| [ShipSmart-Web](https://github.com/nia194/ShipSmart-Web) | React SPA — user-facing UI | React 19, Vite, TypeScript |
+| [ShipSmart-Orchestrator](https://github.com/nia194/ShipSmart-Orchestrator) | Java transactional API — **single writer** to Supabase Postgres; quotes, bookings, saved options, carrier integration | Spring Boot 3.4, Java 17 |
+| **[ShipSmart-API](https://github.com/nia194/ShipSmart-API)** _(this repo)_ | Python AI/orchestration service — RAG, advisors, recommendations | FastAPI, Python 3.13 |
+| [ShipSmart-MCP](https://github.com/nia194/ShipSmart-MCP) | MCP tool server — `validate_address`, `get_quote_preview` (provider-pluggable) | FastAPI + MCP |
+| [ShipSmart-Infra](https://github.com/nia194/ShipSmart-Infra) | Supabase migrations + edge functions, deployment configs, docs | Supabase, Render blueprints |
+
+```
+            ┌──────────────────────────────┐
+            │       ShipSmart-Web          │
+            │       React SPA · Vite       │
+            └──────────────┬───────────────┘
+                           │  Authorization: Bearer <Supabase JWT>
+              ┌────────────┴────────────┐
+              ▼                         ▼
+┌──────────────────────────────┐   ┌──────────────────────────────┐
+│  ShipSmart-Orchestrator      │◀──│  ShipSmart-API (this repo)   │
+│  Java / Spring Boot          │   │  Python / FastAPI            │
+│  Sole writer to Postgres     │   │  RAG · advisors · recs       │
+│  Carrier integration (FedEx) │   │  Forwards JWT to Java for    │
+│                              │   │  recommendation hydration    │
+└──────────────┬───────────────┘   └──────────────┬───────────────┘
+               │                                  │
+               │                                  ▼
+               │                   ┌──────────────────────────────┐
+               │                   │        ShipSmart-MCP         │
+               │                   │   shipping tools (HTTP/MCP)  │
+               │                   │   validate_address, quotes   │
+               │                   └──────────────────────────────┘
+               ▼
+┌──────────────────────────────┐
+│   Supabase Postgres + Auth   │
+└──────────────────────────────┘
+```
+
+This service owns no transactional data. It calls Java (`ShipSmart-Orchestrator`)
+for quote hydration on the recommendation path, and MCP (`ShipSmart-MCP`) for
+every tool execution. The same Supabase JWT the frontend sends here is
+forwarded verbatim to Java so user-scoped queries continue to work without
+re-issuing credentials.
 
 ---
 
@@ -347,6 +422,33 @@ Tests live under `tests/` and use `pytest-asyncio` (async mode = auto).
 
 ---
 
+## Cross-service contracts
+
+When the Java API or MCP server change shape, update these files in
+lockstep:
+
+| Caller | Endpoint | Used by |
+|---|---|---|
+| **Web → Python** | `POST /api/v1/advisor/shipping` | Shipping advisor page. |
+| **Web → Python** | `POST /api/v1/advisor/tracking` | Tracking advisor page. |
+| **Web → Python** | `POST /api/v1/advisor/recommendation` | Recommendations widget. Frontend may send `services[]` directly **or** just `context.shipment_request_id` and let this service hydrate from Java. |
+| **Web → Python** | `POST /api/v1/compare` | Decision-cockpit compare page. |
+| **Web → Python** | `POST /api/v1/rag/query` | RAG q&a over the shipping knowledge base. |
+| **Python → Java** | `GET /api/v1/quotes?shipmentRequestId=…` | Recommendation hydration — forwards inbound `Authorization` header. See `app/services/java_client.py`. |
+| **Python → MCP** | `POST /tools/list`, `POST /tools/call` | Every advisor/orchestration tool call. See `app/services/mcp_client.py`. Auth via `X-MCP-Api-Key` when `SHIPSMART_MCP_API_KEY` is set. |
+
+Schemas live in `app/schemas/` (`advisor.py`, `compare.py`). Java DTO
+changes for the recommendation hydration path should be mirrored in
+`app/services/java_client.py`. MCP tool-catalog changes are picked up
+automatically at boot — the `RemoteToolRegistry` hydrates from `/tools/list`.
+
+Correlation: `RequestLoggingMiddleware` honours inbound `X-Request-Id`
+and W3C `traceparent` (minting them when missing) and stashes them in
+ContextVars. `outbound_headers()` (in `app/core/correlation.py`) propagates
+them to both Java and MCP, so a single request can be `grep`'d end-to-end.
+
+---
+
 ## Operational notes
 
 - **Rate limit 429**: someone is hammering an `/advisor` endpoint. Tune `RATE_LIMIT_ADVISOR` if legitimate.
@@ -355,3 +457,10 @@ Tests live under `tests/` and use `pytest-asyncio` (async mode = auto).
 - **`/advisor/*` or `/orchestration/*` return 503**: `SHIPSMART_MCP_URL` is empty or the MCP server is unreachable. Boot `ShipSmart-MCP` and re-check.
 - **RAG returns nothing relevant**: you're on `LocalHashEmbedding`. Set `EMBEDDING_PROVIDER=openai`.
 - **RAG cleared on restart**: you're on `VECTOR_STORE_TYPE=memory`. Switch to `pgvector` + `DATABASE_URL`.
+- **CORS errors from the frontend**: the web origin (e.g. `http://localhost:5173`) must be in `CORS_ALLOWED_ORIGINS`.
+
+---
+
+## License
+
+See [LICENSE](./LICENSE) for the full text.
