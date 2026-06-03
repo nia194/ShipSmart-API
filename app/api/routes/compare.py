@@ -9,10 +9,9 @@ import logging
 from fastapi import APIRouter, Request
 
 from app.core.config import settings
-from app.core.errors import AppError
 from app.core.rate_limit import limiter
 from app.llm.router import TASK_REASONING, LLMRouter
-from app.schemas.compare import CompareOption, CompareRequest, CompareResponse
+from app.schemas.compare import CompareRequest, CompareResponse
 from app.services.compare_service import generate_compare_response
 
 logger = logging.getLogger(__name__)

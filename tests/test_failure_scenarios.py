@@ -3,13 +3,10 @@ Failure scenario tests for pre-deployment validation.
 Tests graceful degradation when components are missing or fail.
 """
 
-import asyncio
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-
 
 client = TestClient(app)
 

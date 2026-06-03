@@ -7,7 +7,28 @@ Design principles:
   - Cite sources when possible
   - Refuse to guess when context is insufficient
   - Keep answers concise and practical
+
+All prompt construction is routed through ``app.llm.guardrails.assemble`` so
+role-separation, fencing, soft/hard guardrails (C) and grounding (D) are applied
+uniformly. These functions are thin back-compat wrappers that return only the
+messages; the advisor/RAG services call ``assemble`` directly so they can also
+honor a hard-guardrail block and emit decision-path tags.
 """
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from app.llm.guardrails import assemble
+
+
+@dataclass
+class _PlainContext:
+    """Adapter so plain context strings flow through the chunk-aware assembler."""
+
+    text: str
+    source: str = "kb"
+    score: float = 0.0
 
 SYSTEM_PROMPT = (
     "You are a shipping expert assistant for ShipSmart. "
@@ -51,35 +72,19 @@ ADVISOR_SYSTEM_PROMPT = (
 
 
 def build_rag_prompt(query: str, context_chunks: list[str]) -> list[dict[str, str]]:
-    """Build a chat-style message list for a RAG query.
+    """Build a fenced/grounded chat prompt for a RAG query (back-compat wrapper).
 
-    Args:
-        query: The user's question.
-        context_chunks: Retrieved text chunks as context.
-
-    Returns:
-        List of message dicts suitable for an LLM chat API.
+    Delegates to the guardrail assembler. Uses neutralize (not block) mode so it
+    always returns valid messages; the RAG service calls ``assemble`` directly
+    when it needs blocking + decision tags.
     """
-    if context_chunks:
-        context_block = "\n\n---\n\n".join(context_chunks)
-        user_content = (
-            f"Context (from ShipSmart knowledge base):\n{context_block}\n\n"
-            f"Question: {query}\n\n"
-            "Answer based on the context above. If the context doesn't "
-            "cover this topic, say so."
-        )
-    else:
-        user_content = (
-            f"Question: {query}\n\n"
-            "No context was retrieved from the knowledge base. "
-            "Answer only if you are confident, otherwise say you don't "
-            "have enough information."
-        )
-
-    return [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_content},
-    ]
+    contexts = [_PlainContext(text=c) for c in context_chunks]
+    return assemble(
+        system_prompt=SYSTEM_PROMPT,
+        user_text=query,
+        contexts=contexts,
+        block_on_injection=False,
+    ).messages
 
 
 def build_advisor_prompt(
@@ -87,33 +92,16 @@ def build_advisor_prompt(
     context: str,
     tool_results: str,
 ) -> list[dict[str, str]]:
-    """Build a chat-style prompt for the shipping advisor.
+    """Build a fenced/grounded advisor prompt (back-compat wrapper).
 
-    Used by the shipping_advisor_service when combining RAG context
-    with tool results for comprehensive advice.
-
-    Args:
-        query: The user's shipping question.
-        context: Retrieved RAG context text.
-        tool_results: Formatted tool execution results.
-
-    Returns:
-        List of message dicts suitable for an LLM chat API.
+    Delegates to the guardrail assembler (neutralize mode); the advisor service
+    calls ``assemble`` directly for blocking + decision tags.
     """
-    user_parts = [f"Question: {query}"]
-
-    if context:
-        user_parts.append(f"Retrieved context:\n{context}")
-    if tool_results:
-        user_parts.append(f"Tool results:\n{tool_results}")
-
-    if not context and not tool_results:
-        user_parts.append(
-            "No context or tool results available. Answer only if "
-            "confident, otherwise say you need more information."
-        )
-
-    return [
-        {"role": "system", "content": ADVISOR_SYSTEM_PROMPT},
-        {"role": "user", "content": "\n\n".join(user_parts)},
-    ]
+    contexts = [_PlainContext(text=context)] if context else []
+    return assemble(
+        system_prompt=ADVISOR_SYSTEM_PROMPT,
+        user_text=query,
+        contexts=contexts,
+        tool_results=tool_results,
+        block_on_injection=False,
+    ).messages

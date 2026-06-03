@@ -59,7 +59,7 @@ def check_endpoint(
 
 
 def main():
-    print(f"ShipSmart Performance Check")
+    print("ShipSmart Performance Check")
     print(f"  Python API: {PYTHON_URL}")
     print(f"  Java API:   {JAVA_URL}")
     print()

@@ -97,6 +97,45 @@ class Settings(BaseSettings):
     rag_chunk_overlap: int = 50
     rag_documents_path: str = "data/documents"
 
+    # ── Request-time LLM fallback chain (A) ──────────────────────────────────
+    # CSV of providers tried in order AFTER the task's primary client errors on a
+    # *retryable* failure, e.g. "openai,gemini,echo". Empty (default) = today's
+    # single-client behavior: the primary is called once and its error propagates.
+    llm_fallback_chain: str = ""
+    # Retries against ONE provider before moving to the next in the chain. Only
+    # consulted when a fallback chain is configured (keeps today's path retry-free).
+    llm_retry_max_attempts: int = 2
+
+    # ── LLM context budget + per-task overrides (B) ──────────────────────────
+    llm_max_context_tokens: int = 8000
+    # Per-task model / temperature / max-token overrides. Empty string = inherit
+    # the global value (today's behavior). Stored as str so an empty env value
+    # (the documented .env.example default) never fails to parse; numbers are
+    # parsed lazily where used. Advisor/synthesis temperature is clamped <= 0.3.
+    llm_model_reasoning: str = ""
+    llm_model_synthesis: str = ""
+    llm_temperature_reasoning: str = ""
+    llm_temperature_synthesis: str = ""
+    llm_max_tokens_reasoning: str = ""
+    llm_max_tokens_synthesis: str = ""
+
+    # ── Guardrails (C) ───────────────────────────────────────────────────────
+    # NOTE: .env.example documents these as `true` (recommended). The code
+    # default here follows ShipSmart-API task C ("default true"): guardrails are
+    # on unless explicitly disabled. Set GUARDRAILS_ENABLED=false for the legacy
+    # passthrough.
+    guardrails_enabled: bool = True
+    guardrails_block_on_injection: bool = True
+
+    # ── Hybrid retrieval (F) ─────────────────────────────────────────────────
+    rag_hybrid: bool = False            # false = dense-only (today); true = dense + sparse
+    rag_hybrid_alpha: float = 0.5       # dense weight in fusion (0..1; 1.0 = all dense)
+
+    # ── Agentic RAG (G) ──────────────────────────────────────────────────────
+    rag_mode: str = "normal"            # normal (single-shot, today) | agentic
+    rag_agentic_max_steps: int = 3      # cost bound on the agentic loop
+    rag_query_log: bool = False         # write agentic traces to rag_query_log (best-effort)
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]

@@ -61,6 +61,9 @@ async def query_rag(body: RAGQueryRequest, request: Request) -> RAGQueryResponse
         vector_store=rag["vector_store"],
         llm_client=synth_client,
         top_k=settings.rag_top_k,
+        llm_router=llm_router,
+        task=TASK_SYNTHESIS,
+        request_id=getattr(request.state, "request_id", ""),
     )
 
     return RAGQueryResponse(
