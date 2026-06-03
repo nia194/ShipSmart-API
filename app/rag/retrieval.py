@@ -50,3 +50,30 @@ async def retrieve(
 
     rag_cache.set(cache_key, results)
     return results
+
+
+async def retrieve_auto(
+    query: str,
+    embedding_provider: EmbeddingProvider,
+    vector_store: VectorStore,
+    top_k: int = 3,
+) -> tuple[list[SearchResult], str]:
+    """Dispatch dense vs hybrid retrieval based on config (F).
+
+    Returns ``(results, mode)`` where mode is ``"dense"`` (today) or ``"hybrid"``.
+    RAG_HYBRID defaults false, so this is dense-only and identical to ``retrieve``
+    unless hybrid is explicitly enabled. Hybrid is lazy-imported so rank_bm25 is
+    only loaded when actually used.
+    """
+    from app.core.config import settings
+
+    if getattr(settings, "rag_hybrid", False):
+        from app.rag.hybrid import hybrid_retrieve
+
+        results = await hybrid_retrieve(
+            query, embedding_provider, vector_store,
+            top_k=top_k, alpha=getattr(settings, "rag_hybrid_alpha", 0.5),
+        )
+        return results, "hybrid"
+
+    return await retrieve(query, embedding_provider, vector_store, top_k=top_k), "dense"

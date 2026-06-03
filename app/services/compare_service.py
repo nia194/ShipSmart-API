@@ -8,11 +8,11 @@ LLM generates structured decision-support content grounded in quote facts.
 import hashlib
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from app.core.config import settings
 from app.llm.client import LLMClient
+from app.schemas.advisor import DecisionPath
 from app.schemas.compare import (
     CompareOption,
     CompareRequest,
@@ -38,13 +38,13 @@ class CompareCache:
         if key not in self.cache:
             return None
         stored_at, value = self.cache[key]
-        if datetime.now(timezone.utc) - stored_at > timedelta(seconds=self.ttl_seconds):
+        if datetime.now(UTC) - stored_at > timedelta(seconds=self.ttl_seconds):
             del self.cache[key]
             return None
         return value
 
     def set(self, key: str, value: Any) -> None:
-        self.cache[key] = (datetime.now(timezone.utc), value)
+        self.cache[key] = (datetime.now(UTC), value)
 
 
 _compare_cache = CompareCache(ttl_seconds=900)
@@ -225,6 +225,9 @@ async def generate_compare_response(
     prompt = _build_llm_prompt(context)
 
     logger.info("Calling LLM for compare: %d options", len(options))
+    # winner_id and all numbers are deterministic (H); the LLM only writes prose.
+    # If the call or JSON parse fails we fall back to deterministic scenarios.
+    narrative_source = "llm"
     try:
         response_text = await llm_client.complete(
             messages=[
@@ -242,8 +245,11 @@ async def generate_compare_response(
     except Exception as e:
         logger.error("LLM call or JSON parse failed, returning fallback: %s", e)
         llm_response = _fallback_scenarios_dict(options, request)
+        narrative_source = "fallback"
 
     scenarios = _validate_and_merge_scenarios(llm_response, options)
+    for scenario in scenarios.values():
+        scenario.source = narrative_source  # winner/numbers are still rule-based
 
     shipment_summary = (
         f"{request.shipment.item_description} · "
@@ -254,6 +260,11 @@ async def generate_compare_response(
     response = CompareResponse(
         shipment_summary=shipment_summary,
         scenarios=scenarios,
+        decision_path=DecisionPath(
+            mode="normal", retrieval="none", answer=narrative_source,
+            provider=getattr(llm_client, "provider_name", ""),
+            tags=["winner:rule", f"narrative:{narrative_source}"],
+        ),
     )
 
     _compare_cache.set(cache_key, response)

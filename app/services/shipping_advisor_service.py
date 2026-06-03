@@ -18,7 +18,9 @@ import logging
 from dataclasses import dataclass
 
 from app.llm.client import LLMClient
-from app.llm.prompts import build_advisor_prompt
+from app.llm.guardrails import SAFE_REFUSAL, assemble
+from app.llm.prompts import ADVISOR_SYSTEM_PROMPT
+from app.llm.router import TASK_REASONING, LLMRouter
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.retrieval import retrieve
 from app.rag.vector_store import SearchResult, VectorStore
@@ -37,6 +39,7 @@ class ShippingAdvice:
     tools_used: list[str]
     sources: list[dict]
     context_used: bool
+    decision_path: dict | None = None
 
 
 async def get_shipping_advice(
@@ -46,6 +49,9 @@ async def get_shipping_advice(
     vector_store: VectorStore | None = None,
     llm_client: LLMClient | None = None,
     tool_registry: ToolRegistry | None = None,
+    llm_router: LLMRouter | None = None,
+    task: str = TASK_REASONING,
+    request_id: str = "",
 ) -> ShippingAdvice:
     """Generate shipping advice by combining RAG, tools, and LLM.
 
@@ -115,38 +121,65 @@ async def get_shipping_advice(
             except Exception as exc:
                 logger.warning("Tool execution failed: %s", exc)
 
-    # Step 3: Build prompt for LLM
-    context_text = ""
-    if rag_sources:
-        context_text = "\n\n".join([s.text for s in rag_sources])
+    # Step 3: Assemble a fenced/grounded/guardrailed prompt (C/D)
+    tool_text = "\n\n".join(tool_results) if tool_results else ""
+    assembled = assemble(
+        system_prompt=ADVISOR_SYSTEM_PROMPT,
+        user_text=query,
+        contexts=rag_sources,
+        tool_results=tool_text,
+        request_id=request_id,
+    )
+    tags = list(assembled.decisions)
+    if tools_used:
+        tags.append("tools:rule")  # tool triggering is deterministic (rule-based)
 
-    tool_text = ""
-    if tool_results:
-        tool_text = "\n\n".join(tool_results)
+    sources = [
+        {"source": s.source, "chunk_index": s.chunk_index, "score": round(s.score, 3)}
+        for s in rag_sources
+    ]
 
-    prompt = build_advisor_prompt(query, context_text, tool_text)
+    # Step 4: Guardrail block short-circuits before any LLM call.
+    if assembled.blocked:
+        refusal = assembled.refusal or SAFE_REFUSAL
+        return ShippingAdvice(
+            answer=refusal, reasoning_summary=refusal, tools_used=tools_used,
+            sources=sources, context_used=context_used,
+            decision_path={
+                "mode": "normal", "retrieval": "dense", "answer": "rule",
+                "provider": "guardrail", "tags": tags,
+            },
+        )
 
-    # Step 4: Get LLM response
-    answer = ""
-    reasoning_summary = ""
-    if llm_client:
-        answer = await llm_client.complete(prompt)
-        # Extract first sentence as reasoning summary
-        sentences = answer.split(".")
-        reasoning_summary = (sentences[0] + ".") if sentences else answer[:100]
+    # Step 5: Get LLM response (via failover chain when a router is provided).
+    provider, failed_over = "none", False
+    if llm_router is not None:
+        res = await llm_router.execute(task, assembled.messages, request_id=request_id)
+        answer, provider, failed_over = res.text, res.provider, res.failed_over
+    elif llm_client:
+        answer = await llm_client.complete(assembled.messages)
+        provider = getattr(llm_client, "provider_name", "")
     else:
         answer = "No LLM configured. Could not generate shipping advice."
-        reasoning_summary = answer
+
+    sentences = answer.split(".")
+    reasoning_summary = (sentences[0] + ".") if sentences and sentences[0] else answer[:100]
+    src = (
+        "rule" if provider in ("", "none")
+        else "fallback" if (provider == "echo" or failed_over)
+        else "llm"
+    )
 
     return ShippingAdvice(
         answer=answer,
         reasoning_summary=reasoning_summary,
         tools_used=tools_used,
-        sources=[
-            {"source": s.source, "chunk_index": s.chunk_index, "score": round(s.score, 3)}
-            for s in rag_sources
-        ],
+        sources=sources,
         context_used=context_used,
+        decision_path={
+            "mode": "normal", "retrieval": "dense", "answer": src,
+            "provider": provider, "tags": tags,
+        },
     )
 
 

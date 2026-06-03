@@ -2,8 +2,8 @@
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import APIRouter, Request
+from pydantic import BaseModel, Field
 
 from app.core.config import settings
 
@@ -19,6 +19,12 @@ class HealthResponse(BaseModel):
 
 class ReadyResponse(BaseModel):
     status: str
+    rag_mode: str = "normal"
+    rag_hybrid: bool = False
+    guardrails_enabled: bool = True
+    # Resolved LLM failover chain per task (provider names), e.g.
+    # {"reasoning": ["openai", "gemini", "echo"], "synthesis": ["openai", "echo"]}.
+    llm_chains: dict[str, list[str]] = Field(default_factory=dict)
 
 
 @router.get("/health", response_model=HealthResponse, tags=["health"])
@@ -33,9 +39,15 @@ async def health() -> HealthResponse:
 
 
 @router.get("/ready", response_model=ReadyResponse, tags=["health"])
-async def ready() -> ReadyResponse:
-    """Readiness check. Returns 200 when the service can accept traffic.
-
-    Future: check DB connections, LLM client availability, etc.
-    """
-    return ReadyResponse(status="ready")
+async def ready(request: Request) -> ReadyResponse:
+    """Readiness check. Returns 200 when the service can accept traffic, and
+    reports the resolved LLM failover chain (A) + active retrieval/guardrail
+    flags so operators can confirm what's wired without reading logs."""
+    llm_router = getattr(request.app.state, "llm_router", None)
+    return ReadyResponse(
+        status="ready",
+        rag_mode=getattr(settings, "rag_mode", "normal"),
+        rag_hybrid=getattr(settings, "rag_hybrid", False),
+        guardrails_enabled=getattr(settings, "guardrails_enabled", True),
+        llm_chains=llm_router.describe_chains() if llm_router else {},
+    )
