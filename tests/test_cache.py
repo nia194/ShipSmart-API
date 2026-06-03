@@ -8,7 +8,6 @@ import pytest
 
 from app.core.cache import TTLCache, rag_cache, recommendation_cache
 
-
 # ── TTLCache Unit Tests ────────────────────────────────────────────────────
 
 
@@ -110,4 +109,7 @@ async def test_recommendation_caching():
 
     # Second call should be a cache hit
     assert stats2["hits"] == stats1["hits"] + 1
-    assert result1.primary_recommendation.service_name == result2.primary_recommendation.service_name
+    assert (
+        result1.primary_recommendation.service_name
+        == result2.primary_recommendation.service_name
+    )
