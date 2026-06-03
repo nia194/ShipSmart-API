@@ -107,6 +107,10 @@ class InMemoryVectorStore(VectorStore):
     def count(self) -> int:
         return len(self._chunks)
 
+    def all_chunks(self) -> list[StoredChunk]:
+        """Expose stored chunks for the in-process BM25 lexical index (F)."""
+        return list(self._chunks)
+
 
 def create_vector_store() -> VectorStore:
     """Factory: create the configured vector store.

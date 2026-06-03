@@ -7,29 +7,24 @@ dependencies = [
     # ── Web framework ──────────────────────────────────────────────────────
     "fastapi==0.135.3",
     "uvicorn[standard]>=0.34.0",
-
     # ── Config management ──────────────────────────────────────────────────
     "pydantic-settings>=2.7.0",
     "pydantic>=2.10.0",
-
     # ── HTTP client (for calling Java API or external services) ───────────
     "httpx>=0.28.0",
-
     # ── AI / RAG ──────────────────────────────────────────────────────────
     "numpy>=2.0.0",
     "openai>=1.60.0",
     "anthropic>=0.40.0",
-
     # ── Persistent vector store (pgvector via Postgres) ───────────────────
     "asyncpg>=0.30.0",
-
     # ── Rate limiting ─────────────────────────────────────────────────────
     "slowapi>=0.1.9",
-
     # ── Supabase (optional — for direct DB access if needed) ──────────────
     # TODO: Uncomment if FastAPI needs direct Supabase access.
     # Primary DB access should be via the Java API to preserve service boundaries.
     # "supabase>=2.0.0",
+    "rank-bm25>=0.2.2",
 ]
 
 [project.optional-dependencies]
@@ -60,6 +55,11 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# compare_service.py embeds one long, structured LLM prompt where wrapping the
+# lines would hurt readability; line-length is not enforced for that file only.
+"app/services/compare_service.py" = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

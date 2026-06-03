@@ -5,9 +5,10 @@ Real facts only: price, carrier, service_name, arrival_date, transit_days, guara
 No fabricated insurance caps, claim rates, or on-time rates.
 """
 
-from typing import Any
 
 from pydantic import BaseModel, Field
+
+from app.schemas.advisor import DecisionPath
 
 
 class ShipmentContext(BaseModel):
@@ -143,6 +144,10 @@ class Scenario(BaseModel):
         default=None,
         description="Shipment-specific decision intelligence",
     )
+    # winner_id and all numbers are deterministic from quote data (H); the LLM
+    # only writes the narrative prose. "rule" = deterministic fallback produced
+    # this scenario; "llm" = the LLM narrative was used.
+    source: str = Field(default="rule", description="rule | llm | fallback")
 
 
 class CompareResponse(BaseModel):
@@ -154,4 +159,8 @@ class CompareResponse(BaseModel):
     scenarios: dict[str, Scenario] = Field(
         ...,
         description="Four scenario keys: ontime, damage, price, speed. All precomputed.",
+    )
+    decision_path: DecisionPath | None = Field(
+        default=None,
+        description="How the narrative was produced (E): winner/numbers are always rule-based.",
     )

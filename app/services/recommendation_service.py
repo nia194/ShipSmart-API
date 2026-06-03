@@ -10,6 +10,7 @@ Combines deterministic scoring with LLM reasoning to classify options as:
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -50,6 +51,7 @@ class QuoteRecommendations:
     alternatives: list[ServiceRecommendation] = field(default_factory=list)
     summary: str = ""
     metadata: dict = field(default_factory=dict)
+    decision_path: dict | None = None
 
 
 async def generate_recommendations(
@@ -103,6 +105,10 @@ async def generate_recommendations(
                 explanation="No services available.",
             ),
             summary="No shipping services available for this shipment.",
+            decision_path={
+                "mode": "normal", "retrieval": "none", "answer": "rule",
+                "provider": "", "tags": ["ranking:rule", "summary:rule"],
+            },
         )
 
     # Step 1: Score each service
@@ -156,7 +162,10 @@ async def generate_recommendations(
         for s in scored[1:]
     ]
 
-    summary = _generate_summary(primary, alternatives, llm_client)
+    # Ranking/scoring/classification above are 100% deterministic (H). The LLM
+    # is used ONLY for the prose summary, and only when a real provider is wired
+    # — Echo/None keep the deterministic summary so default config is unchanged.
+    summary, summary_source = await _generate_summary(primary, alternatives, llm_client)
 
     result = QuoteRecommendations(
         primary_recommendation=primary,
@@ -165,6 +174,13 @@ async def generate_recommendations(
         metadata={
             "num_options": len(services),
             "primary_type": primary.recommendation_type.value,
+        },
+        decision_path={
+            "mode": "normal",
+            "retrieval": "none",
+            "answer": summary_source,  # rule | llm | fallback
+            "provider": getattr(llm_client, "provider_name", "") if llm_client else "",
+            "tags": ["ranking:rule", f"summary:{summary_source}"],
         },
     )
 
@@ -255,18 +271,52 @@ def _explain_service(
     return f"{base} ({delivery})"
 
 
-def _generate_summary(
+async def _generate_summary(
     primary: ServiceRecommendation,
     alternatives: list[ServiceRecommendation],
     llm_client: LLMClient | None,
-) -> str:
-    """Generate a summary explanation of the recommendation."""
-    summary = f"Recommended: {primary.service_name} at ${primary.price_usd:.2f} "
-    summary += f"({primary.estimated_days} days). {primary.explanation}."
+) -> tuple[str, str]:
+    """Generate the recommendation summary prose and its provenance.
 
+    The deterministic baseline is always computed from the ranked facts. The LLM
+    is consulted ONLY for a real provider (Echo/None keep the deterministic
+    string so default config is byte-for-byte today's behavior) and is given
+    nothing but the computed facts — it can rephrase, never re-rank. Returns
+    ``(summary, source)`` where source ∈ {rule, llm, fallback}.
+    """
+    deterministic = f"Recommended: {primary.service_name} at ${primary.price_usd:.2f} "
+    deterministic += f"({primary.estimated_days} days). {primary.explanation}."
     if alternatives:
-        summary += " Alternative options: "
-        alt_names = ", ".join([a.service_name for a in alternatives[:2]])
-        summary += alt_names + "."
+        deterministic += " Alternative options: "
+        deterministic += ", ".join(a.service_name for a in alternatives[:2]) + "."
 
-    return summary
+    provider = getattr(llm_client, "provider_name", "") if llm_client else ""
+    if llm_client is None or provider == "echo":
+        return deterministic, "rule"
+
+    facts = {
+        "primary": {
+            "service": primary.service_name, "price_usd": primary.price_usd,
+            "estimated_days": primary.estimated_days,
+            "type": primary.recommendation_type.value,
+        },
+        "alternatives": [
+            {"service": a.service_name, "price_usd": a.price_usd,
+             "estimated_days": a.estimated_days}
+            for a in alternatives
+        ],
+    }
+    messages = [
+        {"role": "system", "content": (
+            "You write a 1-2 sentence shipping recommendation summary. Use ONLY "
+            "the service names and numbers in the provided facts — never invent "
+            "prices, transit days, or carriers, and never change the ranking. "
+            "Be concise and neutral.")},
+        {"role": "user", "content": f"Facts (JSON):\n{json.dumps(facts)}\n\nWrite the summary."},
+    ]
+    try:
+        text = (await llm_client.complete(messages) or "").strip()
+    except Exception as exc:
+        logger.warning("Recommendation summary LLM failed (%s) — using deterministic", exc)
+        return deterministic, "fallback"
+    return (text, "llm") if text else (deterministic, "fallback")
