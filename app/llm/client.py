@@ -16,7 +16,7 @@ import logging
 from abc import ABC, abstractmethod
 
 from app.core.config import settings
-from app.core.errors import AppError
+from app.llm.errors import classify_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +79,7 @@ class OpenAIClient(LLMClient):
             return response.choices[0].message.content or ""
         except Exception as e:
             logger.error("OpenAI API error: %s", e)
-            raise AppError(
-                status_code=502, message="LLM provider returned an error"
-            ) from e
+            raise classify_provider_error(e, self.provider_name) from e
 
 
 # ── Google Gemini ────────────────────────────────────────────────────────────
@@ -145,9 +143,9 @@ class GeminiClient(LLMClient):
 
             if resp.status_code != 200:
                 logger.error("Gemini API error: HTTP %d — %s", resp.status_code, resp.text[:200])
-                raise AppError(
-                    status_code=502, message="Gemini API returned an error"
-                )
+                http_err = RuntimeError(f"Gemini HTTP {resp.status_code}: {resp.text[:200]}")
+                http_err.status_code = resp.status_code  # type: ignore[attr-defined]
+                raise classify_provider_error(http_err, self.provider_name)
 
             body = resp.json()
             candidates = body.get("candidates", [])
@@ -159,9 +157,7 @@ class GeminiClient(LLMClient):
 
         except httpx.HTTPError as exc:
             logger.error("Gemini API network error: %s", exc)
-            raise AppError(
-                status_code=502, message="Gemini API network error"
-            ) from exc
+            raise classify_provider_error(exc, self.provider_name) from exc
 
 
 def _messages_to_gemini_contents(messages: list[dict[str, str]]) -> list[dict]:
@@ -263,9 +259,7 @@ class AnthropicClient(LLMClient):
             return "".join(parts)
         except Exception as e:
             logger.error("Anthropic API error: %s", e)
-            raise AppError(
-                status_code=502, message="Anthropic API returned an error"
-            ) from e
+            raise classify_provider_error(e, self.provider_name) from e
 
 
 # ── Llama (via Ollama) ───────────────────────────────────────────────────────
@@ -317,9 +311,7 @@ class LlamaClient(LLMClient):
             return response.choices[0].message.content or ""
         except Exception as e:
             logger.error("Llama/Ollama API error: %s", e)
-            raise AppError(
-                status_code=502, message="Local LLM provider returned an error"
-            ) from e
+            raise classify_provider_error(e, self.provider_name) from e
 
 
 # ── Echo (fallback) ──────────────────────────────────────────────────────────
@@ -376,18 +368,30 @@ class EchoClient(LLMClient):
 # ── Factory ──────────────────────────────────────────────────────────────────
 
 
-def build_provider_client(provider: str) -> LLMClient | None:
+def build_provider_client(
+    provider: str,
+    *,
+    model: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+) -> LLMClient | None:
     """Build a single provider client by name.
 
     Returns None if the provider name is unknown, credentials are missing,
     or instantiation raises. Callers (factory + router) decide how to
     fall back. Provider name is normalised case-insensitively.
+
+    Optional per-task overrides (model / temperature / max_tokens) default to
+    the global LLM_* settings when None, so existing callers are unaffected.
     """
     provider = (provider or "").lower().strip()
     if not provider:
         return None
     if provider == "echo":
         return EchoClient()
+
+    temp = settings.llm_temperature if temperature is None else temperature
+    mt = max_tokens or settings.llm_max_tokens
 
     try:
         if provider == "openai":
@@ -398,10 +402,10 @@ def build_provider_client(provider: str) -> LLMClient | None:
                 return None
             return OpenAIClient(
                 api_key=settings.openai_api_key,
-                model=settings.openai_model,
+                model=model or settings.openai_model,
                 timeout=settings.llm_timeout,
-                max_tokens=settings.llm_max_tokens,
-                temperature=settings.llm_temperature,
+                max_tokens=mt,
+                temperature=temp,
             )
         if provider == "gemini":
             if not settings.gemini_api_key:
@@ -411,10 +415,10 @@ def build_provider_client(provider: str) -> LLMClient | None:
                 return None
             return GeminiClient(
                 api_key=settings.gemini_api_key,
-                model=settings.gemini_model,
+                model=model or settings.gemini_model,
                 timeout=settings.llm_timeout,
-                max_tokens=settings.llm_max_tokens,
-                temperature=settings.llm_temperature,
+                max_tokens=mt,
+                temperature=temp,
             )
         if provider == "anthropic":
             if not settings.anthropic_api_key:
@@ -424,18 +428,18 @@ def build_provider_client(provider: str) -> LLMClient | None:
                 return None
             return AnthropicClient(
                 api_key=settings.anthropic_api_key,
-                model=settings.anthropic_model,
+                model=model or settings.anthropic_model,
                 timeout=settings.llm_timeout,
-                max_tokens=settings.llm_max_tokens,
-                temperature=settings.llm_temperature,
+                max_tokens=mt,
+                temperature=temp,
             )
         if provider == "llama":
             return LlamaClient(
                 base_url=settings.llama_base_url,
-                model=settings.llama_model,
+                model=model or settings.llama_model,
                 timeout=settings.llm_timeout,
-                max_tokens=settings.llm_max_tokens,
-                temperature=settings.llm_temperature,
+                max_tokens=mt,
+                temperature=temp,
             )
         logger.warning("Unknown LLM provider=%r", provider)
         return None

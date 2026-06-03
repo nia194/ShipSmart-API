@@ -17,6 +17,8 @@ import logging
 from dataclasses import dataclass
 
 from app.llm.client import LLMClient
+from app.llm.guardrails import SAFE_REFUSAL, assemble
+from app.llm.router import TASK_REASONING, LLMRouter
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.retrieval import retrieve
 from app.rag.vector_store import SearchResult, VectorStore
@@ -24,6 +26,13 @@ from app.services.mcp_client import RemoteToolRegistry as ToolRegistry
 from app.services.orchestration_service import execute_tool
 
 logger = logging.getLogger(__name__)
+
+# Tracking/delivery guidance system role (routed through the guardrail assembler).
+TRACKING_SYSTEM_PROMPT = (
+    "You are a helpful shipping and delivery guidance expert for ShipSmart. "
+    "Provide practical, actionable guidance for shipping and delivery issues. "
+    "Be empathetic and clear. If the issue requires contacting a carrier, say so."
+)
 
 
 @dataclass
@@ -35,6 +44,7 @@ class TrackingGuidance:
     tools_used: list[str]
     sources: list[dict]
     next_steps: list[str]
+    decision_path: dict | None = None
 
 
 async def get_tracking_guidance(
@@ -44,6 +54,9 @@ async def get_tracking_guidance(
     vector_store: VectorStore | None = None,
     llm_client: LLMClient | None = None,
     tool_registry: ToolRegistry | None = None,
+    llm_router: LLMRouter | None = None,
+    task: str = TASK_REASONING,
+    request_id: str = "",
 ) -> TrackingGuidance:
     """Generate tracking/delivery guidance by combining RAG and optional tools.
 
@@ -92,60 +105,66 @@ async def get_tracking_guidance(
         except Exception as exc:
             logger.warning("Tool execution failed: %s", exc)
 
-    # Step 3: Build prompt for LLM
-    context_text = ""
-    if rag_sources:
-        context_text = "\n\n".join([s.text for s in rag_sources])
+    # Step 3: Assemble a fenced/grounded/guardrailed prompt (C/D)
+    assembled = assemble(
+        system_prompt=TRACKING_SYSTEM_PROMPT,
+        user_text=issue,
+        contexts=rag_sources,
+        tool_results=tool_data,
+        request_id=request_id,
+    )
+    tags = list(assembled.decisions)
+    if tools_used:
+        tags.append("tools:rule")
 
-    prompt = _build_guidance_prompt(issue, context_text, tool_data)
+    sources = [
+        {"source": s.source, "chunk_index": s.chunk_index, "score": round(s.score, 3)}
+        for s in rag_sources
+    ]
 
-    # Step 4: Get LLM response
-    guidance = ""
-    issue_summary = ""
-    next_steps: list[str] = []
+    # Step 4: Guardrail block short-circuits before any LLM call.
+    if assembled.blocked:
+        refusal = assembled.refusal or SAFE_REFUSAL
+        return TrackingGuidance(
+            guidance=refusal, issue_summary=refusal, tools_used=tools_used,
+            sources=sources, next_steps=[],
+            decision_path={
+                "mode": "normal", "retrieval": "dense", "answer": "rule",
+                "provider": "guardrail", "tags": tags,
+            },
+        )
 
-    if llm_client:
-        guidance = await llm_client.complete(prompt)
-        # Extract first sentence as summary
-        sentences = guidance.split(".")
-        issue_summary = (sentences[0] + ".") if sentences else guidance[:100]
-        # Extract potential next steps from guidance
-        next_steps = _extract_next_steps(guidance)
+    # Step 5: Get LLM response (via failover chain when a router is provided).
+    provider, failed_over = "none", False
+    if llm_router is not None:
+        res = await llm_router.execute(task, assembled.messages, request_id=request_id)
+        guidance, provider, failed_over = res.text, res.provider, res.failed_over
+    elif llm_client:
+        guidance = await llm_client.complete(assembled.messages)
+        provider = getattr(llm_client, "provider_name", "")
     else:
         guidance = "No LLM configured. Could not generate tracking guidance."
-        issue_summary = guidance
+
+    sentences = guidance.split(".")
+    issue_summary = (sentences[0] + ".") if sentences and sentences[0] else guidance[:100]
+    next_steps = _extract_next_steps(guidance)
+    src = (
+        "rule" if provider in ("", "none")
+        else "fallback" if (provider == "echo" or failed_over)
+        else "llm"
+    )
 
     return TrackingGuidance(
         guidance=guidance,
         issue_summary=issue_summary,
         tools_used=tools_used,
-        sources=[
-            {"source": s.source, "chunk_index": s.chunk_index, "score": round(s.score, 3)}
-            for s in rag_sources
-        ],
+        sources=sources,
         next_steps=next_steps,
+        decision_path={
+            "mode": "normal", "retrieval": "dense", "answer": src,
+            "provider": provider, "tags": tags,
+        },
     )
-
-
-def _build_guidance_prompt(issue: str, context: str, tool_data: str) -> list[dict]:
-    """Build a chat-style prompt for tracking guidance."""
-    system_msg = (
-        "You are a helpful shipping and delivery guidance expert for ShipSmart. "
-        "Provide practical, actionable guidance for shipping and delivery issues. "
-        "Be empathetic and clear. If the issue requires contacting a carrier, say so. "
-        "Always base advice on the provided context."
-    )
-
-    user_parts = [f"Issue: {issue}"]
-    if context:
-        user_parts.append(f"Relevant information:\n{context}")
-    if tool_data:
-        user_parts.append(f"Tool results:\n{tool_data}")
-
-    return [
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": "\n\n".join(user_parts)},
-    ]
 
 
 def _extract_next_steps(guidance: str) -> list[str]:

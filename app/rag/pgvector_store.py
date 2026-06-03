@@ -114,6 +114,31 @@ class PGVectorStore(VectorStore):
             for row in rows
         ]
 
+    async def search_lexical(self, query_text: str, top_k: int = 3) -> list[SearchResult]:
+        """Sparse retrieval via the Infra lexical function (F).
+
+        Calls ``match_rag_chunks_lexical`` (tsvector + GIN, ts_rank_cd) shipped in
+        ShipSmart-Infra. Returns the same SearchResult shape as dense search so
+        hybrid fusion can combine the two. Score is ts_rank_cd (unbounded);
+        the fuser normalizes before combining with cosine.
+        """
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT source, chunk_index, text, score "
+                "FROM match_rag_chunks_lexical($1, $2)",
+                query_text, top_k,
+            )
+        return [
+            SearchResult(
+                text=row["text"],
+                source=row["source"],
+                chunk_index=row["chunk_index"],
+                score=float(row["score"]),
+            )
+            for row in rows
+        ]
+
     async def clear(self) -> None:
         pool = self._require_pool()
         async with pool.acquire() as conn:

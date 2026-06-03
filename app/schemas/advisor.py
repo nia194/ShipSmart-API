@@ -7,6 +7,22 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class DecisionPath(BaseModel):
+    """How a response was produced (E). Additive + optional — existing clients
+    that ignore it are unaffected.
+
+    ``answer`` is the provenance of the prose: ``rule`` (deterministic / guardrail
+    refusal), ``llm`` (a real provider answered), or ``fallback`` (Echo or a
+    failover provider answered).
+    """
+
+    mode: str = "normal"        # normal | agentic
+    retrieval: str = "dense"    # dense | hybrid | none
+    answer: str = "llm"         # rule | llm | fallback
+    provider: str = ""          # LLM provider that produced the answer, if any
+    tags: list[str] = Field(default_factory=list)  # ordered decision-path tags
+
+
 class ShippingAdvisorRequest(BaseModel):
     """Request for shipping advice."""
 
@@ -25,6 +41,7 @@ class ShippingAdvisorResponse(BaseModel):
     tools_used: list[str]
     sources: list[dict]
     context_used: bool
+    decision_path: DecisionPath | None = None
 
 
 class TrackingAdvisorRequest(BaseModel):
@@ -45,6 +62,7 @@ class TrackingAdvisorResponse(BaseModel):
     tools_used: list[str]
     sources: list[dict]
     next_steps: list[str]
+    decision_path: DecisionPath | None = None
 
 
 class ServiceOption(BaseModel):
@@ -56,6 +74,8 @@ class ServiceOption(BaseModel):
     recommendation_type: str
     explanation: str
     score: float
+    # Ranking, classification, scoring and explanation are all deterministic (H).
+    source: str = "rule"
 
 
 class RecommendationRequest(BaseModel):
@@ -78,3 +98,4 @@ class RecommendationResponse(BaseModel):
     alternatives: list[ServiceOption]
     summary: str
     metadata: dict[str, Any]
+    decision_path: DecisionPath | None = None
