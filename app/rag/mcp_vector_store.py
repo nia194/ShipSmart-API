@@ -90,7 +90,9 @@ class MCPVectorStore(VectorStore):
 
             # Try to get existing chunk count
             try:
-                result = await self._execute_mcp_query(f"SELECT COUNT(*) as count FROM {self._table}")
+                result = await self._execute_mcp_query(
+                    f"SELECT COUNT(*) as count FROM {self._table}"
+                )
                 if result and "rows" in result and len(result["rows"]) > 0:
                     self._chunk_count = result["rows"][0].get("count", 0)
                     logger.info("Vector store has %d existing chunks", self._chunk_count)

@@ -15,6 +15,7 @@ from app.core.errors import AppError
 from app.core.rate_limit import limiter
 from app.llm.router import TASK_REASONING, TASK_SYNTHESIS, LLMRouter
 from app.schemas.advisor import (
+    DecisionPath,
     RecommendationRequest,
     RecommendationResponse,
     ServiceOption,
@@ -29,6 +30,10 @@ from app.services.shipping_advisor_service import get_shipping_advice
 from app.services.tracking_advisor_service import get_tracking_guidance
 
 router = APIRouter(prefix="/advisor", tags=["advisor"])
+
+
+def _decision_path(raw: dict | None) -> DecisionPath | None:
+    return DecisionPath(**raw) if raw else None
 
 
 def _bearer_token(authorization: str | None) -> str | None:
@@ -72,6 +77,8 @@ async def shipping_advisor(
         vector_store=rag["vector_store"],
         llm_client=reasoning_client,
         tool_registry=tool_registry,
+        llm_router=llm_router,
+        request_id=getattr(request.state, "request_id", ""),
     )
 
     return ShippingAdvisorResponse(
@@ -80,6 +87,7 @@ async def shipping_advisor(
         tools_used=advice.tools_used,
         sources=advice.sources,
         context_used=advice.context_used,
+        decision_path=_decision_path(advice.decision_path),
     )
 
 
@@ -115,6 +123,8 @@ async def tracking_advisor(
         vector_store=rag["vector_store"],
         llm_client=reasoning_client,
         tool_registry=tool_registry,
+        llm_router=llm_router,
+        request_id=getattr(request.state, "request_id", ""),
     )
 
     return TrackingAdvisorResponse(
@@ -123,6 +133,7 @@ async def tracking_advisor(
         tools_used=guidance.tools_used,
         sources=guidance.sources,
         next_steps=guidance.next_steps,
+        decision_path=_decision_path(guidance.decision_path),
     )
 
 
@@ -169,6 +180,7 @@ async def get_recommendation(
             recommendation_type=recommendations.primary_recommendation.recommendation_type.value,
             explanation=recommendations.primary_recommendation.explanation,
             score=recommendations.primary_recommendation.score,
+            source="rule",  # ranking + explanation are deterministic (H)
         ),
         alternatives=[
             ServiceOption(
@@ -178,9 +190,11 @@ async def get_recommendation(
                 recommendation_type=alt.recommendation_type.value,
                 explanation=alt.explanation,
                 score=alt.score,
+                source="rule",
             )
             for alt in recommendations.alternatives
         ],
         summary=recommendations.summary,
         metadata=recommendations.metadata,
+        decision_path=_decision_path(recommendations.decision_path),
     )
