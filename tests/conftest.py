@@ -17,11 +17,49 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
+import pytest
 import pytest_asyncio
 
+from app.core.config import settings
 from app.services.mcp_client import RemoteToolRegistry, create_remote_registry
 
 _ZIP_PATTERN = re.compile(r"^\d{5}(-\d{4})?$")
+
+
+# ── Test isolation: pin the self-contained profile, ignore the dev's .env ───
+#
+# The repo's committed .env carries REAL backend config for local runs against
+# production-like services (EMBEDDING_PROVIDER=openai + a live OPENAI_API_KEY,
+# VECTOR_STORE_TYPE=pgvector + a live Supabase DATABASE_URL, openai LLM
+# providers). pydantic-settings loads that .env at import time, so without this
+# fixture the RAG/integration tests would make real OpenAI calls and try to
+# instantiate PGVectorStore — failing with 401s and AttributeErrors, and
+# leaking secrets into a test run.
+#
+# Tests must be hermetic. This autouse fixture forces every test onto the same
+# self-contained profile the e2e stack uses (scripts/run-stack.sh): empty
+# embedding provider → LocalHashEmbedding, memory vector store →
+# InMemoryVectorStore, empty LLM providers → EchoClient, no DATABASE_URL / MCP
+# URL / API key. Any test that needs a specific provider still overrides these
+# via its own monkeypatch (which runs after this baseline).
+@pytest.fixture(autouse=True)
+def _hermetic_settings(monkeypatch):
+    for attr, value in {
+        "embedding_provider": "",
+        "vector_store_type": "memory",
+        "database_url": "",
+        "llm_provider": "",
+        "llm_provider_reasoning": "",
+        "llm_provider_synthesis": "",
+        "llm_fallback_chain": "",
+        "openai_api_key": "",
+        "gemini_api_key": "",
+        "anthropic_api_key": "",
+        "shipsmart_mcp_url": "",
+        "shipsmart_mcp_api_key": "",
+    }.items():
+        monkeypatch.setattr(settings, attr, value, raising=False)
+    yield
 
 
 # ── Canned /tools/list response ─────────────────────────────────────────────
