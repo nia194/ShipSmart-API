@@ -415,10 +415,30 @@ curl -X POST http://localhost:8000/api/v1/advisor/recommendation \
 ## Tests
 
 ```bash
-uv run pytest
+uv run pytest          # 246 tests, ~3s, no network / no real keys
 ```
 
 Tests live under `tests/` and use `pytest-asyncio` (async mode = auto).
+
+**Hermetic by construction.** An autouse fixture in `tests/conftest.py`
+(`_hermetic_settings`) pins every test to the self-contained profile —
+`LocalHashEmbedding` + `InMemoryVectorStore` + `EchoClient`, no DATABASE_URL /
+MCP URL — so the suite ignores the real provider config in your local `.env`
+(OpenAI key, Supabase `DATABASE_URL`, pgvector). The MCP layer is served by a
+`httpx.MockTransport`-backed `RemoteToolRegistry` (no live ShipSmart-MCP needed).
+A test that needs a specific provider overrides these via its own monkeypatch.
+
+Coverage spans the LLM router/fallback/budget, guardrails, dense/hybrid/agentic
+RAG, the advisors, and `decision_path`. Service/seam coverage worth calling out:
+
+| File | Focus |
+| --- | --- |
+| `test_compare.py` | `/api/v1/compare` end-to-end on Echo → the deterministic fallback scenarios (rule-based winners) + the cache. |
+| `test_java_client.py` | `JavaApiClient` hydration over MockTransport: success + every graceful-`None` failure mode. |
+| `test_mcp_client.py` | `RemoteToolRegistry` hydration, a tool call, and MCP-down degrading to `success=false` (never raising). |
+| `test_orchestration_service.py` | Rule + LLM-assisted tool selection (with caching) and the `AppError` mapping in `execute_tool`. |
+| `test_middleware.py` | `X-Request-Id` / `traceparent` minting + echo and `outbound_headers()` propagation. |
+| `test_pgvector_store.py` | SQL-shape contract (cosine operator; `match_rag_chunks_lexical($1,$2)` selecting `source, chunk_index, text, score`) via a fake asyncpg pool — no DB. |
 
 ---
 

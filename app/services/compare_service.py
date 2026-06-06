@@ -212,7 +212,7 @@ async def generate_compare_response(
     llm_client: LLMClient,
 ) -> CompareResponse:
     """Generate a complete compare response with all 4 scenarios."""
-    shipment_hash = _hash_shipment(request.shipment.dict())
+    shipment_hash = _hash_shipment(request.shipment.model_dump())
     sorted_ids = sorted(request.option_ids)
     cache_key = _make_cache_key(shipment_hash, sorted_ids)
 
