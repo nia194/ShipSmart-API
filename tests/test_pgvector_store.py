@@ -18,7 +18,6 @@ pytest.importorskip("asyncpg")  # module imports asyncpg at top
 from app.rag.pgvector_store import PGVectorStore, _to_pgvector_literal  # noqa: E402
 from app.rag.vector_store import StoredChunk  # noqa: E402
 
-
 # ── Fake asyncpg pool / connection ───────────────────────────────────────────
 
 
