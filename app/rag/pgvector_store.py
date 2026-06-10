@@ -14,7 +14,7 @@ import logging
 
 import asyncpg
 
-from app.rag.vector_store import SearchResult, StoredChunk, VectorStore
+from app.rag.vector_store import SearchResult, StoredChunk, VectorStore, validate_table_name
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class PGVectorStore(VectorStore):
                 "Set DATABASE_URL when VECTOR_STORE_TYPE=pgvector."
             )
         self._dsn = dsn
-        self._table = table
+        self._table = validate_table_name(table)
         self._pool: asyncpg.Pool | None = None
 
     async def connect(self) -> None:
