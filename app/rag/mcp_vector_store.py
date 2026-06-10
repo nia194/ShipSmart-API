@@ -18,7 +18,7 @@ from typing import Any
 
 import httpx
 
-from app.rag.vector_store import SearchResult, StoredChunk, VectorStore
+from app.rag.vector_store import SearchResult, StoredChunk, VectorStore, validate_table_name
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class MCPVectorStore(VectorStore):
                 "Set it in .env or via environment variable."
             )
         self._mcp_server_url = mcp_server_url
-        self._table = table
+        self._table = validate_table_name(table)
         self._mcp_api_key = mcp_api_key
         self._client = httpx.AsyncClient(timeout=30.0)
         self._chunk_count = 0
