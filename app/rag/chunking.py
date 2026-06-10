@@ -40,12 +40,16 @@ def chunk_text(
     start = 0
     idx = 0
 
+    # Guard against a misconfigured overlap >= size, which would make the stride
+    # zero or negative and loop forever.
+    step = max(1, chunk_size - chunk_overlap)
+
     while start < len(text):
         end = start + chunk_size
         chunk_text_slice = text[start:end].strip()
         if chunk_text_slice:
             chunks.append(Chunk(text=chunk_text_slice, source=source, index=idx))
             idx += 1
-        start += chunk_size - chunk_overlap
+        start += step
 
     return chunks
