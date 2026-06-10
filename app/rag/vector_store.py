@@ -6,12 +6,30 @@ In-memory store for development; designed for easy swap to a real vector DB late
 from __future__ import annotations
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+_VALID_TABLE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def validate_table_name(table: str) -> str:
+    """Validate a SQL table identifier (defense-in-depth for the pgvector backends).
+
+    Table/identifier names can't be passed as bound parameters, so the pgvector
+    stores interpolate ``table`` straight into SQL. It comes from config
+    (PGVECTOR_TABLE), not user input, but we still reject anything that isn't a
+    plain identifier so a malformed config can never produce injectable SQL.
+    """
+    if not _VALID_TABLE.match(table or ""):
+        raise ValueError(
+            f"Invalid table name {table!r}: must match {_VALID_TABLE.pattern}"
+        )
+    return table
 
 
 @dataclass

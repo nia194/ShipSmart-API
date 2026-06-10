@@ -53,7 +53,7 @@ _compare_cache = CompareCache(ttl_seconds=900)
 def _make_cache_key(shipment_hash: str, option_ids_sorted: list[str]) -> str:
     ids_str = ",".join(option_ids_sorted)
     combined = f"{shipment_hash}:{ids_str}"
-    return hashlib.md5(combined.encode()).hexdigest()
+    return hashlib.md5(combined.encode(), usedforsecurity=False).hexdigest()
 
 
 def _hash_shipment(shipment_dict: dict[str, Any]) -> str:
@@ -63,7 +63,7 @@ def _hash_shipment(shipment_dict: dict[str, Any]) -> str:
         if k not in ["id", "timestamp"]
     }
     json_str = json.dumps(key_fields, sort_keys=True, default=str)
-    return hashlib.md5(json_str.encode()).hexdigest()
+    return hashlib.md5(json_str.encode(), usedforsecurity=False).hexdigest()
 
 
 def _clean_service_name(carrier: str, service_name: str) -> str:
