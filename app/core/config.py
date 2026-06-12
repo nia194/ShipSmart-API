@@ -88,6 +88,10 @@ class Settings(BaseSettings):
     # Model-driven, read-only tool-calling loop over the MCP tools + retrieve_rag.
     agent_enabled: bool = True          # gate POST /api/v1/agent/run
     agent_max_steps: int = 5            # hard cost bound on the agent loop
+    # Total retrieve_rag calls allowed per run, independent of agent_max_steps.
+    # 1 = single-shot retrieval only (today's effective behavior); >1 enables the
+    # bounded, conditional re-retrieval the agent triggers ONLY on weak coverage.
+    agent_max_retrievals: int = 2       # cap on retrieve_rag calls per agent run
 
     # ── ShipSmart MCP (tool server) ──────────────────────────────────────────
     # HTTP endpoint of the standalone ShipSmart-MCP service. Empty = no tools
