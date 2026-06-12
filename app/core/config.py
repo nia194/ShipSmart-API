@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     rate_limit_advisor: str = "10/minute"
     rate_limit_orchestration: str = "20/minute"
     rate_limit_compare: str = "10/minute"
+    rate_limit_agent: str = "10/minute"
+
+    # ── Agent (Concierge) ────────────────────────────────────────────────────
+    # Model-driven, read-only tool-calling loop over the MCP tools + retrieve_rag.
+    agent_enabled: bool = True          # gate POST /api/v1/agent/run
+    agent_max_steps: int = 5            # hard cost bound on the agent loop
 
     # ── ShipSmart MCP (tool server) ──────────────────────────────────────────
     # HTTP endpoint of the standalone ShipSmart-MCP service. Empty = no tools
