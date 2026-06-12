@@ -1,4 +1,4 @@
-"""Tests for agentic RAG (G) with fake retrievers/clients (no network/DB)."""
+"""Tests for iterative RAG (G) with fake retrievers/clients (no network/DB)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import pytest
 
 import app.core.config as config_mod
 from app.llm.client import EchoClient
-from app.rag.agentic import _UNCOVERED_REFUSAL, agentic_rag
+from app.rag.iterative import _UNCOVERED_REFUSAL, iterative_rag
 from app.rag.embeddings import LocalHashEmbedding
 from app.rag.vector_store import InMemoryVectorStore, SearchResult
 from app.services.rag_service import rag_query
@@ -33,16 +33,16 @@ def _retriever(sequence: list[list[SearchResult]]):
 
 @pytest.mark.asyncio
 async def test_stops_at_max_steps_and_refuses_when_uncovered():
-    res = await agentic_rag("q", retriever=_retriever([]), llm_client=EchoClient(), max_steps=3)
+    res = await iterative_rag("q", retriever=_retriever([]), llm_client=EchoClient(), max_steps=3)
     assert res.steps == 3                       # bounded
     assert res.answer == _UNCOVERED_REFUSAL     # refuse, don't guess (D)
     assert res.answer_source == "rule"
-    assert "agentic:uncovered_refusal" in res.decisions
+    assert "iterative:uncovered_refusal" in res.decisions
 
 
 @pytest.mark.asyncio
 async def test_covered_on_first_step_stops_early():
-    res = await agentic_rag(
+    res = await iterative_rag(
         "q", retriever=_retriever([[_chunk()]]), llm_client=EchoClient(), max_steps=3,
     )
     assert res.steps == 1
@@ -52,11 +52,11 @@ async def test_covered_on_first_step_stops_early():
 
 @pytest.mark.asyncio
 async def test_reformulates_then_covers():
-    res = await agentic_rag(
+    res = await iterative_rag(
         "q", retriever=_retriever([[], [_chunk()]]), llm_client=EchoClient(), max_steps=3,
     )
     assert res.steps == 2
-    assert "agentic:reformulate" in res.decisions
+    assert "iterative:reformulate" in res.decisions
 
 
 # ── tool escalation ──────────────────────────────────────────────────────────
@@ -64,7 +64,7 @@ async def test_reformulates_then_covers():
 
 @pytest.mark.asyncio
 async def test_escalates_to_tools_when_query_needs_ground_truth(mcp_tool_registry):
-    res = await agentic_rag(
+    res = await iterative_rag(
         "what will this shipment cost",
         retriever=_retriever([]),          # no KB coverage
         llm_client=EchoClient(),
@@ -73,21 +73,21 @@ async def test_escalates_to_tools_when_query_needs_ground_truth(mcp_tool_registr
         max_steps=2,
     )
     assert "get_quote_preview" in res.tools_used
-    assert any(d.startswith("agentic:tools:") for d in res.decisions)
+    assert any(d.startswith("iterative:tools:") for d in res.decisions)
     # tool results cover the question → not the uncovered refusal
     assert res.answer != _UNCOVERED_REFUSAL
 
 
-# ── normal vs agentic via the service ────────────────────────────────────────
+# ── normal vs iterative via the service ───────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_rag_service_agentic_mode_tags_mode(monkeypatch):
-    monkeypatch.setattr(config_mod.settings, "rag_mode", "agentic", raising=False)
+async def test_rag_service_iterative_mode_tags_mode(monkeypatch):
+    monkeypatch.setattr(config_mod.settings, "rag_mode", "iterative", raising=False)
     res = await rag_query(
         "anything", LocalHashEmbedding(dims=16), InMemoryVectorStore(), EchoClient(),
     )
-    assert res.metadata["decision_path"]["mode"] == "agentic"
+    assert res.metadata["decision_path"]["mode"] == "iterative"
     assert "steps" in res.metadata
 
 
