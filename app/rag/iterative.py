@@ -1,11 +1,16 @@
 """
-Agentic RAG (G) — bounded plan → retrieve → assess → (tools) → ground+answer.
+Iterative RAG (G) — bounded plan → retrieve → assess → (tools) → ground+answer.
 
-Used by the RAG/advisor paths when RAG_MODE=agentic; RAG_MODE=normal keeps the
-single-shot pipeline. The loop is cost-bounded (RAG_AGENTIC_MAX_STEPS), reuses
+Used by the RAG/advisor paths when RAG_MODE=iterative; RAG_MODE=normal keeps the
+single-shot pipeline. The loop is cost-bounded (RAG_ITERATIVE_MAX_STEPS), reuses
 hybrid retrieval (F), respects the context budget + guardrails via the assembler
 (B/C/D), answers through the router's failover chain (A), and tags every decision
 (E). It NEVER blocks the response on trace logging.
+
+This layer is DETERMINISTIC — there is no LLM in its control flow (the model is
+used only for the final grounded answer). The genuinely model-driven loop lives
+in ``app/services/agent_service.py``; this module is honest "iterative retrieval
+with grounding," which is why it is named ``iterative`` rather than "agentic".
 
 Design choices for determinism + testability:
   * the retriever is injected (``RetrieverFn``) so tests drive coverage without a
@@ -44,7 +49,7 @@ _UNCOVERED_REFUSAL = (
 
 
 @dataclass
-class AgenticResult:
+class IterativeRagResult:
     answer: str
     sources: list[SearchResult] = field(default_factory=list)
     decisions: list[str] = field(default_factory=list)
@@ -111,11 +116,11 @@ async def _maybe_escalate_tools(
             tools_used.append("validate_address")
             parts.append(f"Address Validation: {json.dumps(res.data)}")
     except Exception as exc:  # noqa: BLE001 - tools are best-effort in the loop
-        logger.warning("Agentic tool escalation failed: %s", exc)
+        logger.warning("Iterative-RAG tool escalation failed: %s", exc)
     return tools_used, "\n\n".join(parts)
 
 
-async def agentic_rag(
+async def iterative_rag(
     query: str,
     *,
     retriever: RetrieverFn,
@@ -127,11 +132,11 @@ async def agentic_rag(
     top_k: int | None = None,
     max_steps: int | None = None,
     request_id: str = "",
-) -> AgenticResult:
-    """Run the bounded agentic retrieval loop and return a grounded answer."""
+) -> IterativeRagResult:
+    """Run the bounded iterative retrieval loop and return a grounded answer."""
     top_k = top_k or settings.rag_top_k
-    max_steps = max_steps or getattr(settings, "rag_agentic_max_steps", 3)
-    decisions: list[str] = ["agentic:plan"]
+    max_steps = max_steps or getattr(settings, "rag_iterative_max_steps", 3)
+    decisions: list[str] = ["iterative:plan"]
 
     # PLAN → RETRIEVE → ASSESS loop (bounded).
     accumulated: dict[tuple[str, int], SearchResult] = {}
@@ -142,24 +147,24 @@ async def agentic_rag(
         results = await retriever(current_q, top_k)
         for r in results:
             accumulated[(r.source, r.chunk_index)] = r
-        decisions.append(f"agentic:step{steps}:retrieved:{len(results)}")
+        decisions.append(f"iterative:step{steps}:retrieved:{len(results)}")
         if _covered(results):
             break
         if steps < max_steps:
             current_q = _reformulate(query, steps - 1)
-            decisions.append("agentic:reformulate")
+            decisions.append("iterative:reformulate")
 
     chunks = sorted(accumulated.values(), key=lambda r: r.score, reverse=True)[:top_k]
 
     # Optional tool escalation for ground truth.
     tools_used, tool_text = await _maybe_escalate_tools(query, context, tool_registry)
     if tools_used:
-        decisions.append("agentic:tools:" + ",".join(tools_used))
+        decisions.append("iterative:tools:" + ",".join(tools_used))
 
     # REFUSE deterministically when nothing covered the question (D).
     if not chunks and not tool_text:
-        decisions.append("agentic:uncovered_refusal")
-        return AgenticResult(
+        decisions.append("iterative:uncovered_refusal")
+        return IterativeRagResult(
             answer=_UNCOVERED_REFUSAL, sources=[], decisions=decisions,
             provider="rule", steps=steps, tools_used=tools_used, answer_source="rule",
         )
@@ -172,7 +177,7 @@ async def agentic_rag(
     decisions.extend(assembled.decisions)
     if assembled.blocked:
         decisions.append("guardrail:blocked")
-        return AgenticResult(
+        return IterativeRagResult(
             answer=assembled.refusal or SAFE_REFUSAL, sources=[], decisions=decisions,
             provider="guardrail", steps=steps, tools_used=tools_used,
             blocked=True, answer_source="rule",
@@ -194,7 +199,7 @@ async def agentic_rag(
         else "fallback" if (provider == "echo" or failed_over)
         else "llm"
     )
-    return AgenticResult(
+    return IterativeRagResult(
         answer=answer, sources=assembled.kept_sources, decisions=decisions,
         provider=provider, steps=steps, tools_used=tools_used, answer_source=answer_source,
     )

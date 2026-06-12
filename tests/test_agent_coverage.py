@@ -3,7 +3,7 @@
 The ``retrieve_rag`` observation fed back to the model leads with a coverage
 signal (top_score / covered / chunk_count) so the agent can reason over result
 quality. ``covered`` reuses the deterministic RAG layer's grounding threshold
-(``app.rag.agentic._covered``) — read, not re-invented.
+(``app.rag.iterative._covered``) — read, not re-invented.
 """
 
 from __future__ import annotations

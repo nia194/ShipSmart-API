@@ -36,7 +36,7 @@ from app.llm.client import ToolCallResult
 from app.llm.guardrails import SAFE_REFUSAL, assemble
 from app.llm.prompts import ADVISOR_SYSTEM_PROMPT
 from app.llm.router import TASK_REASONING, TASK_SYNTHESIS, LLMRouter
-from app.rag.agentic import _covered as rag_covered
+from app.rag.iterative import _covered as rag_covered
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.retrieval import retrieve_auto
 from app.rag.vector_store import SearchResult, VectorStore

@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _maybe_log_trace(vector_store, query: str, ag, request_id: str) -> None:
-    """Best-effort agentic trace into rag_query_log (G). Never blocks/raises.
+    """Best-effort iterative-RAG trace into rag_query_log (G). Never blocks/raises.
 
     Only attempts a write when RAG_QUERY_LOG=true and the vector store exposes a
     Postgres pool (pgvector). Any failure is swallowed — tracing must never break
@@ -81,13 +81,14 @@ async def rag_query(
     otherwise the single ``llm_client`` is used (today's behavior). A guardrail
     block short-circuits with a safe refusal and never calls the LLM.
 
-    RAG_MODE=agentic runs the bounded agentic loop (G); RAG_MODE=normal (default)
-    is the single-shot path below.
+    RAG_MODE=iterative runs the bounded iterative loop (G); RAG_MODE=normal
+    (default) is the single-shot path below.
     """
-    if getattr(settings, "rag_mode", "normal") == "agentic":
-        from app.rag.agentic import agentic_rag, make_retriever
+    # "agentic" is a deprecated alias for "iterative" (legacy .env compatibility).
+    if getattr(settings, "rag_mode", "normal") in ("iterative", "agentic"):
+        from app.rag.iterative import iterative_rag, make_retriever
 
-        ag = await agentic_rag(
+        ag = await iterative_rag(
             query,
             retriever=make_retriever(embedding_provider, vector_store),
             llm_router=llm_router, llm_client=llm_client, task=task,
@@ -107,7 +108,7 @@ async def rag_query(
                 "steps": ag.steps,
                 "tools_used": ag.tools_used,
                 "decision_path": {
-                    "mode": "agentic",
+                    "mode": "iterative",
                     "retrieval": "hybrid" if getattr(settings, "rag_hybrid", False) else "dense",
                     "answer": ag.answer_source, "provider": ag.provider,
                     "tags": ag.decisions,

@@ -18,7 +18,7 @@ from app.llm.errors import (
 )
 from app.llm.guardrails import assemble, detect_injection
 from app.llm.router import TASK_SYNTHESIS, LLMRouter
-from app.rag.agentic import _UNCOVERED_REFUSAL, agentic_rag
+from app.rag.iterative import _UNCOVERED_REFUSAL, iterative_rag
 from app.rag.hybrid import fuse
 from app.rag.vector_store import SearchResult
 
@@ -154,17 +154,17 @@ def test_fuse_alpha_zero_is_sparse_only():
     assert top[0].source == "c"
 
 
-# ── G: agentic stops at max_steps=1 and refuses when uncovered ───────────────
+# ── G: iterative RAG stops at max_steps=1 and refuses when uncovered ──────────
 
 
 @pytest.mark.asyncio
-async def test_agentic_single_step_uncovered_refuses(monkeypatch):
+async def test_iterative_single_step_uncovered_refuses(monkeypatch):
     monkeypatch.setattr(config_mod.settings, "rag_top_k", 3, raising=False)
 
     async def empty_retriever(_q: str, _k: int):
         return []
 
-    res = await agentic_rag("q", retriever=empty_retriever, llm_client=EchoClient(), max_steps=1)
+    res = await iterative_rag("q", retriever=empty_retriever, llm_client=EchoClient(), max_steps=1)
     assert res.steps == 1
     assert res.answer == _UNCOVERED_REFUSAL
-    assert "agentic:reformulate" not in res.decisions  # no reformulate at max_steps=1
+    assert "iterative:reformulate" not in res.decisions  # no reformulate at max_steps=1

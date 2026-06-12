@@ -50,7 +50,7 @@ distinction matters:
 
 - An **always-on** re-retrieval loop spends extra LLM turns and retrievals on *every* query,
   including the simple ones that were already well covered. That is cost without benefit, and
-  it is exactly what the deterministic `app/rag/agentic.py` loop already does cheaply and
+  it is exactly what the deterministic `app/rag/iterative.py` loop already does cheaply and
   without an LLM in its control flow.
 - A **conditional** loop spends the extra cost **only when the coverage signal says the first
   retrieval was thin** — which is precisely the class of question (hard, compound,
@@ -64,13 +64,15 @@ before.
 
 > **Note on the codebase vs the prior plan.** The concierge plan proposed renaming
 > `app/rag/agentic.py` → `iterative.py`, adding `iterative_rag` as the `retrieve_rag` backend,
-> and a `propose_shipment` pseudo-tool. In the **shipped** code, `retrieve_rag` wraps the
-> single-shot `retrieve_auto` (not the multi-pass deterministic loop), the deterministic loop
-> is still `app/rag/agentic.py` with `_covered()` as its grounding-threshold notion, and there
-> is no `propose_shipment`. This plan describes what is actually true now. The agentic
-> re-retrieval added here lives entirely in the **agent layer**, reusing the deterministic
-> layer's `_covered()` threshold so the two agree on what "covered" means — it does **not**
-> change the deterministic layer's behavior or control flow.
+> and a `propose_shipment` pseudo-tool. The long-deferred **agentic→iterative rename is now
+> DONE**: the deterministic loop lives in `app/rag/iterative.py` (`iterative_rag`,
+> `IterativeRagResult`, `_covered()`), exposed via `RAG_MODE=iterative` (legacy `agentic` is
+> accepted as a deprecated alias, as is the `RAG_AGENTIC_MAX_STEPS` env var). In the
+> **shipped** code `retrieve_rag` still wraps the single-shot `retrieve_auto` (not the
+> multi-pass deterministic loop), and there is no `propose_shipment`. This plan describes what
+> is actually true now. The agentic re-retrieval added here lives entirely in the **agent
+> layer**, reusing the deterministic layer's `_covered()` threshold so the two agree on what
+> "covered" means — it does **not** change the deterministic layer's behavior or control flow.
 
 ---
 
@@ -108,7 +110,7 @@ measures.
 ## 4. The coverage signal (Phase 1)
 
 The deterministic RAG layer already computes per-chunk similarity scores and a
-coverage/threshold notion: `app/rag/agentic.py:_covered()` = "at least one retrieved chunk with
+coverage/threshold notion: `app/rag/iterative.py:_covered()` = "at least one retrieved chunk with
 `score > 0`". We **read** that — we do not change it — and surface it as an **observable signal**
 in the `retrieve_rag` tool result the model sees.
 
@@ -263,7 +265,7 @@ tag, and that the control query spends zero extra retrievals.
  AgentResult { answer, steps[], tools_used[], sources[], decisions[], provider }
 ```
 
-The deterministic `app/rag/agentic.py` loop is untouched and still available for the RAG/advisor
+The deterministic `app/rag/iterative.py` loop is untouched and still available for the RAG/advisor
 paths via `RAG_MODE`. The agentic re-retrieval added here is purely in the agent layer and
 reuses that layer's `_covered()` grounding threshold.
 
