@@ -36,6 +36,7 @@ from app.llm.client import ToolCallResult
 from app.llm.guardrails import SAFE_REFUSAL, assemble
 from app.llm.prompts import ADVISOR_SYSTEM_PROMPT
 from app.llm.router import TASK_REASONING, TASK_SYNTHESIS, LLMRouter
+from app.rag.agentic import _covered as rag_covered
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.retrieval import retrieve_auto
 from app.rag.vector_store import SearchResult, VectorStore
@@ -72,10 +73,32 @@ _AGENT_SYSTEM_PROMPT = (
     "- Use `validate_address` to confirm an address is deliverable.\n"
     "- Use `get_quote_preview` to estimate shipping cost and transit time.\n"
     "Call tools as needed, one step at a time, reacting to each result. When you "
-    "have enough information, stop calling tools and give your final answer."
+    "have enough information, stop calling tools and give your final answer.\n"
+    "Each `retrieve_rag` result starts with a coverage signal "
+    "(top_score, covered, chunk_count). If coverage is weak (covered=false or a "
+    "low top_score), the knowledge base did not cover your question well: "
+    "reformulate with a DIFFERENT, more specific query and retrieve again. For a "
+    "compound question (e.g. shipping a drone abroad spans lithium batteries, "
+    "electronics export, and the destination country's import rules), decompose "
+    "it and retrieve each sub-area separately. Never repeat an identical query. "
+    "When coverage is strong, proceed — do not retrieve again needlessly. If a "
+    "sub-area is still uncovered after retrying, say so honestly in your answer "
+    "rather than guessing."
 )
 
 _OBSERVATION_MAX_CHARS = 280
+
+# Fed back as the observation when a retrieval is skipped, so the model gets a
+# clear next-step instruction instead of a silently dropped tool call.
+_DEGENERATE_RETRY_MSG = (
+    "Retrieval skipped: this query is unchanged from a prior search this run. "
+    "Reformulate with a different, more specific query or proceed to your answer."
+)
+_RETRIEVAL_CAP_MSG = (
+    "Retrieval limit reached for this run (agent_max_retrievals). No further "
+    "searches are allowed — synthesize your answer from the evidence gathered, "
+    "and honestly flag any sub-area you could not cover."
+)
 
 
 @dataclass
@@ -88,6 +111,39 @@ class AgentResult:
     sources: list[dict] = field(default_factory=list)
     decisions: list[str] = field(default_factory=list)
     provider: str = ""
+
+
+@dataclass
+class CoverageSignal:
+    """Quality signal the agent observes after a retrieval to decide whether the
+    result is strong enough or a re-retrieval is warranted.
+
+    Generic on purpose (a future tool could surface the same shape): it carries
+    the highest similarity among retrieved chunks, whether anything cleared the
+    deterministic RAG layer's grounding threshold, and how many chunks came back.
+    ``covered`` reuses the pure layer's grounding notion (``rag_covered``) so the
+    agent and the deterministic loop agree on what "covered" means.
+    """
+
+    top_score: float
+    covered: bool
+    chunk_count: int
+
+    def as_line(self) -> str:
+        return (
+            f"coverage: top_score={self.top_score:.3f} "
+            f"covered={'true' if self.covered else 'false'} "
+            f"chunks={self.chunk_count}"
+        )
+
+
+def coverage_of(results: list[SearchResult]) -> CoverageSignal:
+    """Read (do not change) the deterministic layer's per-chunk scores + grounding
+    threshold into an observable coverage signal for the agent."""
+    top = max((float(getattr(r, "score", 0.0) or 0.0) for r in results), default=0.0)
+    return CoverageSignal(
+        top_score=top, covered=rag_covered(results), chunk_count=len(results),
+    )
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -104,12 +160,16 @@ def _truncate(text: str, limit: int = _OBSERVATION_MAX_CHARS) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _format_rag_observation(results: list[SearchResult]) -> str:
+def _format_rag_observation(
+    results: list[SearchResult], coverage: CoverageSignal,
+) -> str:
+    """Render the retrieval observation, leading with the coverage signal so the
+    model can reason over result quality before reading the chunks."""
+    header = coverage.as_line()
     if not results:
-        return "No relevant documents found in the ShipSmart knowledge base."
-    return "\n".join(
-        f"[{r.source} score={r.score:.3f}] {r.text}" for r in results
-    )
+        return f"{header}\nNo relevant documents found in the ShipSmart knowledge base."
+    body = "\n".join(f"[{r.source} score={r.score:.3f}] {r.text}" for r in results)
+    return f"{header}\n{body}"
 
 
 def _content_text(content: Any) -> str:
@@ -162,12 +222,13 @@ async def _dispatch(
     registry: ToolRegistry,
     embedding_provider: EmbeddingProvider,
     vector_store: VectorStore,
-) -> tuple[str, list[SearchResult]]:
-    """Run one tool call. Returns (observation_text, rag_chunks).
+) -> tuple[str, list[SearchResult], CoverageSignal | None]:
+    """Run one tool call. Returns (observation_text, rag_chunks, coverage).
 
     ``retrieve_rag`` → existing single-shot RAG (one pass; chunks returned for
-    grounding). MCP tools → ``execute_tool`` (input validation + 502 handling);
-    an ``AppError`` becomes a recoverable observation rather than aborting.
+    grounding, plus an observable coverage signal). MCP tools → ``execute_tool``
+    (input validation + 502 handling); an ``AppError`` becomes a recoverable
+    observation rather than aborting, and ``coverage`` is None (not a retrieval).
     """
     name = call.name
     args = call.arguments or {}
@@ -177,15 +238,17 @@ async def _dispatch(
         results, _mode = await retrieve_auto(
             query, embedding_provider, vector_store, top_k=settings.rag_top_k,
         )
-        return _format_rag_observation(results), list(results)
+        results = list(results)
+        coverage = coverage_of(results)
+        return _format_rag_observation(results, coverage), results, coverage
 
     try:
         res = await execute_tool(name, args, registry)
     except AppError as exc:
         # Hallucinated args / unknown tool / 502 → feed the error back as an
         # observation so the model can self-correct on the next step.
-        return f"Tool '{name}' error: {exc.message}", []
-    return res.answer, []
+        return f"Tool '{name}' error: {exc.message}", [], None
+    return res.answer, [], None
 
 
 # ── Public entry point ───────────────────────────────────────────────────────
@@ -200,10 +263,19 @@ async def run_agent(
     embedding_provider: EmbeddingProvider,
     vector_store: VectorStore,
     max_steps: int | None = None,
+    max_retrievals: int | None = None,
     request_id: str = "",
 ) -> AgentResult:
-    """Run the model-driven agent loop and return a grounded answer."""
+    """Run the model-driven agent loop and return a grounded answer.
+
+    Retrieval is conditionally agentic: the model sees each ``retrieve_rag``
+    result's coverage signal and may retrieve AGAIN with a different query when
+    coverage is weak. Re-retrieval is bounded by ``agent_max_retrievals`` and
+    guarded against identical-query loops, so a well-covered first retrieval
+    stays single-shot (today's behavior).
+    """
     max_steps = max_steps or settings.agent_max_steps
+    max_retrievals = max_retrievals or settings.agent_max_retrievals
     reasoning = llm_router.for_task(TASK_REASONING)
     tools = [*registry.list_schemas(), RETRIEVE_RAG_SCHEMA]
 
@@ -217,6 +289,11 @@ async def run_agent(
     tools_used: list[str] = []
     rag_chunks: dict[tuple[str, int], SearchResult] = {}
     tool_text_parts: list[str] = []
+
+    # Re-retrieval bookkeeping (conditional, bounded, non-degenerate).
+    retrievals = 0
+    retrieval_queries: set[str] = set()      # normalized queries already searched
+    retrieval_coverages: list[bool] = []     # covered? per executed retrieval
 
     step = 0
     while step < max_steps:
@@ -242,9 +319,46 @@ async def run_agent(
         messages.append(_assistant_turn(out))
         result_blocks: list[dict[str, Any]] = []
         for call in out.calls:
+            if call.name == "retrieve_rag":
+                # Conditional, bounded re-retrieval. Guard degenerate retries and
+                # the per-run cap BEFORE touching the store; both feed a clear
+                # observation back so the model can recover or proceed.
+                norm = str((call.arguments or {}).get("query") or "").strip().lower()
+                if norm and norm in retrieval_queries:
+                    decisions.append("agent:retrieve:rejected")
+                    observation = _DEGENERATE_RETRY_MSG
+                elif retrievals >= max_retrievals:
+                    decisions.append("agent:retrieve:capped")
+                    observation = _RETRIEVAL_CAP_MSG
+                else:
+                    decisions.append("agent:tool:retrieve_rag")
+                    tools_used.append("retrieve_rag")
+                    # A retry after any prior weak-coverage retrieval is a
+                    # justified reformulation (e.g. decomposing a compound query).
+                    if retrievals >= 1 and not all(retrieval_coverages):
+                        decisions.append("agent:retrieve:reformulate")
+                    retrievals += 1
+                    decisions.append(f"agent:retrieve:{retrievals}")
+                    if norm:
+                        retrieval_queries.add(norm)
+                    observation, chunks, coverage = await _dispatch(
+                        call, registry=registry,
+                        embedding_provider=embedding_provider, vector_store=vector_store,
+                    )
+                    retrieval_coverages.append(bool(coverage and coverage.covered))
+                    for r in chunks:
+                        rag_chunks[(r.source, r.chunk_index)] = r
+                steps_trace.append(
+                    {"step": step, "tool": call.name, "observation": _truncate(observation)}
+                )
+                result_blocks.append(
+                    {"type": "tool_result", "tool_use_id": call.id, "content": observation}
+                )
+                continue
+
             decisions.append(f"agent:tool:{call.name}")
             tools_used.append(call.name)
-            observation, chunks = await _dispatch(
+            observation, chunks, _coverage = await _dispatch(
                 call, registry=registry,
                 embedding_provider=embedding_provider, vector_store=vector_store,
             )
@@ -263,6 +377,10 @@ async def run_agent(
     else:
         # Loop exhausted without a final turn → force one synthesis pass below.
         decisions.append("agent:max_steps")
+
+    # Honest gap: a sub-area the agent retried but still could not cover.
+    if len(retrieval_coverages) >= 2 and not retrieval_coverages[-1]:
+        decisions.append("agent:retrieve:uncovered")
 
     return await _synthesize(
         query,
