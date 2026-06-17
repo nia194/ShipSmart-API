@@ -5,6 +5,7 @@ Set values in .env for local dev.
 In production (Render), set them via the Render dashboard.
 """
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -82,6 +83,16 @@ class Settings(BaseSettings):
     rate_limit_advisor: str = "10/minute"
     rate_limit_orchestration: str = "20/minute"
     rate_limit_compare: str = "10/minute"
+    rate_limit_agent: str = "10/minute"
+
+    # ── Agent (Concierge) ────────────────────────────────────────────────────
+    # Model-driven, read-only tool-calling loop over the MCP tools + retrieve_rag.
+    agent_enabled: bool = True          # gate POST /api/v1/agent/run
+    agent_max_steps: int = 5            # hard cost bound on the agent loop
+    # Total retrieve_rag calls allowed per run, independent of agent_max_steps.
+    # 1 = single-shot retrieval only (today's effective behavior); >1 enables the
+    # bounded, conditional re-retrieval the agent triggers ONLY on weak coverage.
+    agent_max_retrievals: int = 2       # cap on retrieve_rag calls per agent run
 
     # ── ShipSmart MCP (tool server) ──────────────────────────────────────────
     # HTTP endpoint of the standalone ShipSmart-MCP service. Empty = no tools
@@ -131,10 +142,15 @@ class Settings(BaseSettings):
     rag_hybrid: bool = False            # false = dense-only (today); true = dense + sparse
     rag_hybrid_alpha: float = 0.5       # dense weight in fusion (0..1; 1.0 = all dense)
 
-    # ── Agentic RAG (G) ──────────────────────────────────────────────────────
-    rag_mode: str = "normal"            # normal (single-shot, today) | agentic
-    rag_agentic_max_steps: int = 3      # cost bound on the agentic loop
-    rag_query_log: bool = False         # write agentic traces to rag_query_log (best-effort)
+    # ── Iterative RAG (G) ─────────────────────────────────────────────────────
+    rag_mode: str = "normal"            # normal (single-shot, today) | iterative
+                                        # ("agentic" is a deprecated alias for "iterative")
+    # Cost bound on the iterative loop. RAG_AGENTIC_MAX_STEPS is a deprecated env
+    # alias accepted for legacy .env compatibility.
+    rag_iterative_max_steps: int = Field(
+        3, validation_alias=AliasChoices("rag_iterative_max_steps", "rag_agentic_max_steps"),
+    )
+    rag_query_log: bool = False         # write iterative-RAG traces to rag_query_log (best-effort)
 
     @property
     def cors_origins_list(self) -> list[str]:

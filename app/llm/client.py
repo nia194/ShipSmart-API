@@ -14,11 +14,43 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any
 
 from app.core.config import settings
 from app.llm.errors import classify_provider_error
 
 logger = logging.getLogger(__name__)
+
+
+# ── Tool-calling primitives ──────────────────────────────────────────────────
+# Minimal, provider-agnostic shapes for the agent loop (app/services/agent_service).
+# Only providers with native function calling implement complete_with_tools; the
+# rest keep the default NotImplementedError so the agent falls back to the
+# text-based single-pass selection (select_tool_with_llm).
+
+
+@dataclass
+class ToolCall:
+    """A single tool invocation requested by the model."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ToolCallResult:
+    """Outcome of one ``complete_with_tools`` turn.
+
+    ``kind`` is ``"final"`` when the model is done (``text`` holds the answer) or
+    ``"tool_calls"`` when it wants tools run (``calls`` holds them; ``text`` may
+    carry any accompanying narration).
+    """
+
+    kind: str  # "final" | "tool_calls"
+    text: str = ""
+    calls: list[ToolCall] = field(default_factory=list)
 
 
 class LLMClient(ABC):
@@ -32,6 +64,22 @@ class LLMClient(ABC):
     @abstractmethod
     async def complete(self, messages: list[dict[str, str]]) -> str:
         """Send messages to the LLM and return the text response."""
+
+    async def complete_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ToolCallResult:
+        """Run one tool-calling turn and return a :class:`ToolCallResult`.
+
+        Default: providers without native function calling raise
+        ``NotImplementedError`` so the agent loop can fall back to the existing
+        text-based tool selection. Override in providers that support native
+        tool use (e.g. AnthropicClient).
+        """
+        raise NotImplementedError(
+            f"{self.provider_name} has no native tool calling"
+        )
 
 
 # ── OpenAI ───────────────────────────────────────────────────────────────────
@@ -261,6 +309,192 @@ class AnthropicClient(LLMClient):
             logger.error("Anthropic API error: %s", e)
             raise classify_provider_error(e, self.provider_name) from e
 
+    async def complete_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ToolCallResult:
+        """Native Anthropic tool use (``tool_use`` blocks).
+
+        Message ``content`` may be a plain string or a list of Anthropic content
+        blocks (the agent loop appends ``tool_use`` / ``tool_result`` blocks for
+        prior turns); both are passed through. Returns a ``tool_calls`` result
+        when the model emits ``tool_use`` blocks, otherwise a ``final`` result.
+        """
+        try:
+            system_parts: list[str] = []
+            chat_messages: list[dict[str, Any]] = []
+            for msg in messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if role == "system":
+                    if content:
+                        system_parts.append(
+                            content if isinstance(content, str) else str(content)
+                        )
+                    continue
+                anth_role = "assistant" if role == "assistant" else "user"
+                chat_messages.append({"role": anth_role, "content": content})
+
+            if not chat_messages:
+                chat_messages = [{"role": "user", "content": "(no user message)"}]
+
+            response = await self._client.messages.create(
+                model=self._model,
+                max_tokens=self._max_tokens,
+                temperature=self._temperature,
+                system="\n\n".join(system_parts) if system_parts else None,
+                messages=chat_messages,
+                tools=_to_anthropic_tools(tools),
+            )
+
+            text_parts: list[str] = []
+            calls: list[ToolCall] = []
+            for block in getattr(response, "content", []) or []:
+                btype = getattr(block, "type", None)
+                if btype == "tool_use":
+                    calls.append(
+                        ToolCall(
+                            id=getattr(block, "id", ""),
+                            name=getattr(block, "name", ""),
+                            arguments=dict(getattr(block, "input", {}) or {}),
+                        )
+                    )
+                else:
+                    text = getattr(block, "text", None)
+                    if text:
+                        text_parts.append(text)
+
+            if calls:
+                return ToolCallResult(
+                    kind="tool_calls", text="".join(text_parts), calls=calls,
+                )
+            return ToolCallResult(kind="final", text="".join(text_parts))
+        except Exception as e:
+            logger.error("Anthropic tool-calling error: %s", e)
+            raise classify_provider_error(e, self.provider_name) from e
+
+
+def _to_anthropic_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert registry tool schemas to Anthropic's ``tools`` shape.
+
+    Registry schema (``RemoteTool.schema()`` / the agent's local tools):
+        {"name", "description", "parameters": [{"name", "type", "description",
+         "required"}]}
+    Anthropic expects ``input_schema`` as a JSON-Schema object.
+    """
+    out: list[dict[str, Any]] = []
+    for tool in tools:
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+        for param in tool.get("parameters", []):
+            properties[param["name"]] = {
+                "type": param.get("type", "string"),
+                "description": param.get("description", ""),
+            }
+            if param.get("required"):
+                required.append(param["name"])
+        out.append({
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "input_schema": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            },
+        })
+    return out
+
+
+# ── Scripted tool-calling stub (keyless, deterministic) ──────────────────────
+
+
+class ScriptedToolCallingClient(LLMClient):
+    """Deterministic, keyless stand-in for a native tool-calling provider.
+
+    Modeled on ShipSmart-MCP's mock shipping provider: it replays a fixed list of
+    ``ToolCallResult`` turns so the agent loop can run end-to-end with no API keys
+    (the local stack runs keyless, where the reasoning client would otherwise be
+    EchoClient — which has no native tool calling). Each ``complete_with_tools``
+    call returns the next scripted turn; once the script is exhausted it returns a
+    ``final`` turn. ``complete`` returns the configured final text.
+
+    Selected via ``LLM_PROVIDER_REASONING=scripted`` and gated to non-production.
+    """
+
+    # Canonical sequence for the concierge use case (§3.3 of the plan):
+    # retrieve a policy → validate the address → preview a quote → answer.
+    _DEFAULT_FINAL_TEXT = (
+        "Based on the gathered information, here is your shipping summary."
+    )
+
+    def __init__(
+        self,
+        turns: list[ToolCallResult] | None = None,
+        *,
+        final_text: str = _DEFAULT_FINAL_TEXT,
+    ) -> None:
+        self._turns = list(turns) if turns is not None else _default_script()
+        self._final_text = final_text
+        self._i = 0
+        logger.info(
+            "ScriptedToolCallingClient initialized (%d scripted turns)",
+            len(self._turns),
+        )
+
+    @property
+    def provider_name(self) -> str:
+        return "scripted"
+
+    async def complete(self, messages: list[dict[str, str]]) -> str:
+        return self._final_text
+
+    async def complete_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ToolCallResult:
+        if self._i < len(self._turns):
+            turn = self._turns[self._i]
+            self._i += 1
+            return turn
+        return ToolCallResult(kind="final", text=self._final_text)
+
+
+def _default_script() -> list[ToolCallResult]:
+    """The canonical concierge tool sequence the keyless e2e exercises."""
+    return [
+        ToolCallResult(
+            kind="tool_calls",
+            calls=[ToolCall(
+                id="call_1", name="retrieve_rag",
+                arguments={"query": "power bank lithium battery shipping restrictions"},
+            )],
+        ),
+        ToolCallResult(
+            kind="tool_calls",
+            calls=[ToolCall(
+                id="call_2", name="validate_address",
+                arguments={
+                    "street": "123 Main St", "city": "Beverly Hills",
+                    "state": "CA", "zip_code": "90210",
+                },
+            )],
+        ),
+        ToolCallResult(
+            kind="tool_calls",
+            calls=[ToolCall(
+                id="call_3", name="get_quote_preview",
+                arguments={
+                    "origin_zip": "10001", "destination_zip": "90210",
+                    "weight_lbs": 5.0, "length_in": 10.0,
+                    "width_in": 8.0, "height_in": 6.0,
+                },
+            )],
+        ),
+        ToolCallResult(kind="final", text=ScriptedToolCallingClient._DEFAULT_FINAL_TEXT),
+    ]
+
 
 # ── Llama (via Ollama) ───────────────────────────────────────────────────────
 
@@ -389,6 +623,16 @@ def build_provider_client(
         return None
     if provider == "echo":
         return EchoClient()
+    if provider == "scripted":
+        # Deterministic keyless tool-calling stub for the agent loop. Gated to
+        # non-production so it can never be selected in a live deployment.
+        if settings.is_production:
+            logger.warning(
+                "Provider 'scripted' requested in production — refusing; "
+                "falling back."
+            )
+            return None
+        return ScriptedToolCallingClient()
 
     temp = settings.llm_temperature if temperature is None else temperature
     mt = max_tokens or settings.llm_max_tokens

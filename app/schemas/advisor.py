@@ -16,7 +16,7 @@ class DecisionPath(BaseModel):
     failover provider answered).
     """
 
-    mode: str = "normal"        # normal | agentic
+    mode: str = "normal"        # normal | iterative
     retrieval: str = "dense"    # dense | hybrid | none
     answer: str = "llm"         # rule | llm | fallback
     provider: str = ""          # LLM provider that produced the answer, if any
