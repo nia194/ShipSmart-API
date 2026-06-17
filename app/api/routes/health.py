@@ -22,6 +22,7 @@ class ReadyResponse(BaseModel):
     rag_mode: str = "normal"
     rag_hybrid: bool = False
     guardrails_enabled: bool = True
+    agent_enabled: bool = True
     # Resolved LLM failover chain per task (provider names), e.g.
     # {"reasoning": ["openai", "gemini", "echo"], "synthesis": ["openai", "echo"]}.
     llm_chains: dict[str, list[str]] = Field(default_factory=dict)
@@ -49,5 +50,6 @@ async def ready(request: Request) -> ReadyResponse:
         rag_mode=getattr(settings, "rag_mode", "normal"),
         rag_hybrid=getattr(settings, "rag_hybrid", False),
         guardrails_enabled=getattr(settings, "guardrails_enabled", True),
+        agent_enabled=getattr(settings, "agent_enabled", True),
         llm_chains=llm_router.describe_chains() if llm_router else {},
     )
