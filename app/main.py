@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.api.routes import advisor, compare, health, info, orchestration, rag
+from app.api.routes import advisor, agent, compare, health, info, orchestration, rag
 from app.core.config import settings
 from app.core.errors import register_error_handlers
 from app.core.logging import get_logger, setup_logging
@@ -179,6 +179,7 @@ app.include_router(info.router, prefix="/api/v1")
 app.include_router(orchestration.router, prefix="/api/v1")
 app.include_router(rag.router, prefix="/api/v1")
 app.include_router(advisor.router, prefix="/api/v1")
+app.include_router(agent.router, prefix="/api/v1")
 app.include_router(compare.router, prefix="/api")
 
 
