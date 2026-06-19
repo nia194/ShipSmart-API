@@ -28,6 +28,7 @@ stays observable even with no API keys, no database, and no tool server.
 
 - [Engineering highlights](#engineering-highlights)
 - [Spotlight: the Concierge agent](#spotlight-the-concierge-agent)
+- [Spotlight: compliance review (UC2)](#spotlight-compliance-review-uc2)
 - [Retrieval modes](#retrieval-modes)
 - [The ShipSmart ecosystem](#the-shipsmart-ecosystem)
 - [What this service does](#what-this-service-does)
@@ -135,6 +136,76 @@ actually answered — so the loop is debuggable without reading logs.
 
 ---
 
+## Spotlight: compliance review (UC2)
+
+`POST /api/v1/compliance/check` reviews a shipment for compliance concerns and returns an
+**advisory** verdict, individual findings, a grounded summary, and the full decision trail.
+It is a **deterministic** flow with **one optional model-in-the-loop step** — the honest
+distinction this codebase insists on.
+
+```mermaid
+flowchart TD
+    S["Shipment<br/>(international derived in code)"] --> ST["Structural rules<br/>(pure · no LLM · no retrieval)"]
+    ST --> INV["Investigate 4 fixed areas<br/>lithium · customs · restriction · value"]
+    INV --> G["retrieve_area (shared primitive)<br/>covered → info · uncovered → unverified"]
+    G --> CR{"critic enabled?<br/>COMPLIANCE_CRITIQUE_MAX_ROUNDS"}
+    CR -->|"no (default)"| SUM
+    CR -->|"yes"| CRITIC["UC2 critic (model)<br/>propose_gaps → ground each"]
+    CRITIC -->|"uncovered → unverified, never a flag"| SUM["Advisory summary<br/>(guardrailed assembler + synthesis chain)"]
+    SUM --> V["Verdict + findings + sources + decisions[]"]
+```
+
+**What makes it honest, not hand-wavy:**
+
+- **Deterministic spine.** Structural rules read only the shipment (e.g. *international +
+  no declared value → customs value missing*) — pure, reproducible, no model. The four
+  fixed areas are grounded through the **same `retrieve_area` primitive the Concierge uses**.
+- **Uncovered ⇒ `unverified`, never a fabricated flag.** This is the load-bearing
+  invariant. When the knowledge base can't cover an area, the system says so — it never
+  invents a clearance or a violation.
+- **The critic is the only model in the loop — and it can only direct attention.** With
+  `COMPLIANCE_CRITIQUE_MAX_ROUNDS > 0`, a model proposes *additional* areas via a
+  `propose_gaps` tool call; each proposal is then **grounded the same way**. The model never
+  asserts a conclusion. Without native tool calling (the keyless default) the critic is a
+  deterministic no-op.
+- **Advisory only.** The summary prompt forbids "compliant/cleared"; the verdict is
+  `action_required` / `review_recommended` / `advisory`. This assists a human reviewer.
+- **Keyless-friendly.** Unlike the advisor/agent routes, `/compliance/check` needs no MCP
+  tools — only the LLM router + RAG — so it works out-of-the-box in local dev.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/compliance/check \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "origin_country": "US", "destination_country": "BR",
+        "declared_value_usd": 600,
+        "description": "camera drone with lithium battery"
+      }'
+```
+
+```jsonc
+{
+  "verdict": "action_required",
+  "summary": "Flags: lithium cells are Class 9 dangerous goods … value_threshold could not be verified — needs review.",
+  "findings": [
+    {"area": "dangerous_goods_declaration", "status": "flag", "kind": "structural", "detail": "…"},
+    {"area": "import_restriction", "status": "info", "kind": "investigation", "sources": [...]},
+    {"area": "value_threshold", "status": "unverified", "kind": "investigation", "detail": "…needs review"}
+  ],
+  "decisions": ["compliance:plan", "compliance:structural:dangerous_goods_declaration",
+                "compliance:investigate:lithium_battery", "lithium_battery:covered",
+                "compliance:verdict:action_required"],
+  "critique_rounds": 0,
+  "provider": "openai"
+}
+```
+
+`python scripts/compliance_eval.py` runs this keyless and contrasts the critic OFF vs ON on
+a drone-into-Brazil case — showing the critic ground a destination-specific area the four
+fixed areas under-cover, all visible in `decisions[]`.
+
+---
+
 ## Retrieval modes
 
 Retrieval scales with config; defaults reproduce the simplest path. The naming is honest:
@@ -205,6 +276,7 @@ re-issuing credentials.
 | Capability | Endpoint | Notes |
 |---|---|---|
 | **Concierge agent** | `POST /api/v1/agent/run` | Model-driven reason→act→observe loop over MCP tools + `retrieve_rag`, with bounded conditional re-retrieval. Returns a grounded answer **+ full reasoning trace**. Read-only. See [spotlight](#spotlight-the-concierge-agent). |
+| **Compliance review (UC2)** | `POST /api/v1/compliance/check` | Deterministic structural + grounded-area analysis with an optional model-in-the-loop critic. Returns an **advisory** verdict + findings + decision trail. Uncovered ⇒ `unverified`, never a fabricated flag. See [spotlight](#spotlight-compliance-review-uc2). |
 | RAG query | `POST /api/v1/rag/query` | Embed → similarity search → LLM synthesis. Honors `RAG_MODE` / `RAG_HYBRID`. |
 | RAG ingest | `POST /api/v1/rag/ingest` | Loads `data/documents/*` into the vector store. Auto-runs on first boot when pgvector is empty. |
 | Shipping advisor | `POST /api/v1/advisor/shipping` | RAG + tool calls (`validate_address`, `get_quote_preview`) + LLM reasoning. |
@@ -215,7 +287,7 @@ re-issuing credentials.
 | Tool catalog | `GET /api/v1/orchestration/tools` | JSON Schemas for all registered tools. |
 | Service info | `GET /api/v1/info` | Returns service metadata (version, env, active providers). No secrets exposed. |
 | Liveness | `GET /health` | Liveness probe. |
-| Readiness | `GET /ready` | Reports resolved `rag_mode`, `rag_hybrid`, `guardrails_enabled`, `agent_enabled`, and per-task LLM failover chains — confirm the live wiring without reading logs. |
+| Readiness | `GET /ready` | Reports resolved `rag_mode`, `rag_hybrid`, `guardrails_enabled`, `agent_enabled`, `compliance_enabled`, and per-task LLM failover chains — confirm the live wiring without reading logs. |
 
 Interactive docs (dev only): `http://localhost:8000/docs`.
 
@@ -257,6 +329,11 @@ Interactive docs (dev only): `http://localhost:8000/docs`.
 | `app/main.py` | Lifespan: builds embedding provider, vector store (memory, pgvector, or mcp), LLM router, and the remote `RemoteToolRegistry` backed by the ShipSmart-MCP service. Auto-ingests on first boot. |
 | `app/services/agent_service.py` | **The Concierge agent** — model-driven reason→act→observe loop over the MCP tools + a `retrieve_rag` pseudo-tool, with bounded conditional re-retrieval on weak coverage and a keyless text-fallback for providers without native tool calling. |
 | `app/api/routes/agent.py` · `app/schemas/agent.py` | `POST /api/v1/agent/run` route + request/response schemas (answer + reasoning trace). |
+| `app/agents/compliance/` | **The compliance flow (UC2)** — `structural.py` (pure rules), `areas.py` (fixed decomposition), `critic.py` (the optional model-in-the-loop `propose_gaps` step), `service.py` (the pipeline), `models.py` (domain types). Uncovered areas surface as honest `unverified` findings, never fabricated flags. |
+| `app/api/routes/compliance.py` · `app/schemas/compliance.py` | `POST /api/v1/compliance/check` route + schemas (advisory verdict + findings + decision trail). |
+| `app/bootstrap.py` | Composition root — builds and wires every singleton (embedding, vector store, LLM router, RAG bundle, audit sink, MCP registry) onto `app.state`; `app/main.py` delegates its lifespan here. |
+| `app/rag/grounding.py` | Shared grounding primitive (`CoverageSignal` / `coverage_of` / `retrieve_area`) reused by the Concierge agent **and** the compliance flow. No LLM in its control flow. |
+| `app/core/audit.py` | Audit/tracing foundation — `AuditEvent` + swappable `AuditSink` (logging / in-memory); the compliance verdict is emitted here. |
 | `app/services/mcp_client.py` | Thin HTTP client for the standalone ShipSmart-MCP server, plus `RemoteTool` / `RemoteToolRegistry` shims that ducktype the old in-process tool interface. |
 | `app/core/config.py` | All settings (env-driven via pydantic-settings). |
 | `app/core/cache.py` | TTL cache used by RAG, recommendation, and LLM tool selection. |
@@ -265,12 +342,12 @@ Interactive docs (dev only): `http://localhost:8000/docs`.
 | `app/core/middleware.py` | `RequestLoggingMiddleware` — logs method, path, status, duration; honors inbound `X-Request-Id` and W3C `traceparent` (mints them when missing), stores them in ContextVars, and echoes both back as response headers. |
 | `app/core/correlation.py` | ContextVars (`request_id_var`, `traceparent_var`) + `outbound_headers()` helper. Lets outbound clients (Java API, MCP) forward the same correlation IDs on every hop. |
 | `app/core/rate_limit.py` | Shared `slowapi` limiter (per IP). |
-| `app/schemas/` | Pydantic request/response models (`advisor.py`, `compare.py`, `agent.py`). |
+| `app/schemas/` | Pydantic request/response models (`advisor.py`, `compare.py`, `agent.py`, `compliance.py`). |
 | `app/llm/router.py` | Task-based router: each task → its own provider with a request-time failover chain. |
 | `app/llm/client.py` | `OpenAIClient`, `AnthropicClient` (native tool calling), `GeminiClient`, `LlamaClient`, `EchoClient`, and the keyless `ScriptedToolCallingClient`. |
 | `app/llm/guardrails.py` | Prompt-assembly guardrails: role separation, fencing of untrusted data, prompt-injection detection (block/neutralize), and grounding/refusal. Every decision is tagged for `decision_path`. |
 | `app/llm/budget.py` | Token estimation + context-budget trimming (drops lowest-scoring chunks to fit the window) and temperature clamping. |
-| `app/llm/prompts.py` | Prompt templates for RAG queries and advisor flows (system instructions, context formatting). |
+| `app/llm/prompts.py` | Prompt templates for RAG, advisor, and compliance-summary flows (system instructions, context formatting). |
 | `app/rag/embeddings.py` | `OpenAIEmbedding` + `LocalHashEmbedding` placeholder. |
 | `app/rag/vector_store.py` | `VectorStore` ABC + `InMemoryVectorStore`. |
 | `app/rag/pgvector_store.py` | Postgres + pgvector implementation (asyncpg, cosine via `<=>`, plus lexical search for hybrid). |
@@ -455,6 +532,18 @@ AGENT_MAX_STEPS=5              # hard cost bound on the agent loop
 AGENT_MAX_RETRIEVALS=2         # cap on retrieve_rag calls per run (1 = single-shot; >1 enables re-retrieval)
 ```
 
+### Compliance (UC2)
+
+```env
+COMPLIANCE_ENABLED=true              # gate POST /api/v1/compliance/check (404 when false)
+COMPLIANCE_CRITIQUE_MAX_ROUNDS=0     # 0 = critic off (deterministic only); >0 enables the UC2 critic
+COMPLIANCE_MAX_GAP_AREAS=3           # max gap areas accepted from the critic per round
+COMPLIANCE_VALUE_THRESHOLD_USD=2500  # declared value (USD) that flags a commercial invoice (international)
+```
+
+Advisory only — this endpoint assists a human reviewer and never declares a shipment
+"compliant" or "cleared". It needs no MCP tools (LLM router + RAG only).
+
 ### Shipping provider
 
 Carrier credentials (`SHIPPING_PROVIDER`, `UPS_*`, `FEDEX_*`, `DHL_*`,
@@ -471,8 +560,9 @@ SHIPSMART_MCP_API_KEY=                    # optional; must match MCP_API_KEY on 
 ```
 
 If `SHIPSMART_MCP_URL` is empty, the advisor, agent, and orchestration routes
-return HTTP 503 (no tools available). See the **ShipSmart-MCP** repo for
-how to run the tool server locally.
+return HTTP 503 (no tools available). The compliance route (UC2) is exempt — it
+uses no MCP tools, so it works without the tool server. See the **ShipSmart-MCP**
+repo for how to run the tool server locally.
 
 ### Rate limiting
 
@@ -481,6 +571,7 @@ RATE_LIMIT_ADVISOR=10/minute       # /advisor/* endpoints
 RATE_LIMIT_ORCHESTRATION=20/minute # /orchestration/run
 RATE_LIMIT_COMPARE=10/minute       # /compare endpoint
 RATE_LIMIT_AGENT=10/minute         # /agent/run endpoint
+RATE_LIMIT_COMPLIANCE=10/minute    # /compliance/check endpoint
 ```
 
 Per IP, via slowapi. Returns HTTP 429 when exceeded.
@@ -586,6 +677,11 @@ curl -X POST http://localhost:8000/api/v1/orchestration/run \
 curl -X POST http://localhost:8000/api/v1/agent/run \
   -H 'Content-Type: application/json' \
   -d '{"query":"Can I ship a power bank to Berlin, and what would it cost from 10001?","context":{"origin_zip":"10001","destination_zip":"10115","weight_lbs":2}}'
+
+# compliance review (UC2 — advisory; deterministic + optional critic)
+curl -X POST http://localhost:8000/api/v1/compliance/check \
+  -H 'Content-Type: application/json' \
+  -d '{"origin_country":"US","destination_country":"BR","declared_value_usd":600,"description":"camera drone with lithium battery"}'
 
 # recommendation (deterministic scoring)
 curl -X POST http://localhost:8000/api/v1/advisor/recommendation \
