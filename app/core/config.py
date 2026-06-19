@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     app_name: str = "shipsmart-api-python"
     app_version: str = "0.1.0"
     log_level: str = "INFO"
+    # Audit + tracing sink: "logging" (default — structured log lines) or "memory"
+    # (in-process capture, mainly for tests). A persistent backend is a future adapter.
+    audit_sink: str = "logging"
 
     # ── Internal service-to-service ─────────────────────────────────────────
     internal_java_api_url: str = "http://localhost:8080"
