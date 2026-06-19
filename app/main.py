@@ -7,144 +7,25 @@ Render start command:
 
 Local dev:
   uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+Startup/shutdown wiring lives in app.bootstrap (the composition root); this
+module only constructs the FastAPI app, middleware, error handlers, and routes.
 """
 
-from contextlib import asynccontextmanager
-
-import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.api.routes import advisor, agent, compare, health, info, orchestration, rag
+from app.bootstrap import lifespan
 from app.core.config import settings
 from app.core.errors import register_error_handlers
-from app.core.logging import get_logger, setup_logging
+from app.core.logging import setup_logging
 from app.core.middleware import RequestLoggingMiddleware
 from app.core.rate_limit import limiter
-from app.llm.router import TASK_SYNTHESIS, create_llm_router
-from app.rag.embeddings import LocalHashEmbedding, create_embedding_provider
-from app.rag.ingestion import ingest_documents, load_documents
-from app.rag.vector_store import VectorStore, create_vector_store
-from app.services.mcp_client import create_remote_registry
 
 setup_logging()
-logger = get_logger(__name__)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Startup / shutdown lifecycle."""
-    logger.info(
-        "Starting %s v%s in '%s' mode",
-        settings.app_name, settings.app_version, settings.app_env,
-    )
-
-    # Shared HTTP client for calling the Java API and external services
-    app.state.http_client = httpx.AsyncClient(
-        base_url=settings.internal_java_api_url,
-        timeout=30.0,
-    )
-    logger.info("Java API base URL: %s", settings.internal_java_api_url)
-
-    # RAG pipeline components + task-based LLM router
-    embedding_provider = create_embedding_provider()
-    if isinstance(embedding_provider, LocalHashEmbedding):
-        logger.warning(
-            "EMBEDDING_PROVIDER is unset — using LocalHashEmbedding. "
-            "Retrieval will be lexical/non-semantic and unsuitable for production. "
-            "Set EMBEDDING_PROVIDER=openai + OPENAI_API_KEY for real semantic search."
-        )
-
-    vector_store: VectorStore = create_vector_store()
-    logger.info(
-        "Vector store backend: %s (%s)",
-        settings.vector_store_type, type(vector_store).__name__,
-    )
-
-    # Connect persistent backends and optionally seed documents.
-    # PGVectorStore is detected duck-typed to keep asyncpg an optional dep
-    # for users running with VECTOR_STORE_TYPE=memory.
-    if hasattr(vector_store, "connect") and hasattr(vector_store, "disconnect"):
-        await vector_store.connect()  # type: ignore[attr-defined]
-        if settings.rag_auto_ingest:
-            existing = 0
-            try:
-                existing = await vector_store.count_async()  # type: ignore[attr-defined]
-            except Exception as exc:
-                logger.warning("Vector store count_async failed: %s", exc)
-            if existing == 0:
-                logger.info("Persistent vector store empty — auto-ingesting documents")
-                docs = load_documents(settings.rag_documents_path)
-                if docs:
-                    await ingest_documents(
-                        documents=docs,
-                        embedding_provider=embedding_provider,
-                        vector_store=vector_store,
-                        chunk_size=settings.rag_chunk_size,
-                        chunk_overlap=settings.rag_chunk_overlap,
-                    )
-            else:
-                logger.info(
-                    "Persistent vector store already has %d chunks — skipping auto-ingest",
-                    existing,
-                )
-
-    llm_router = create_llm_router()
-    app.state.llm_router = llm_router
-    # Back-compat: existing callers still read rag["llm_client"]. Point it
-    # at the synthesis client (RAG q&a is the historical use of this slot).
-    app.state.rag = {
-        "embedding_provider": embedding_provider,
-        "vector_store": vector_store,
-        "llm_client": llm_router.for_task(TASK_SYNTHESIS),
-    }
-    logger.info("LLM router initialized: %s", llm_router.describe())
-    logger.info("RAG pipeline initialized (embedding=%s)",
-                type(embedding_provider).__name__)
-
-    # Remote tool registry — hydrated from the standalone ShipSmart-MCP
-    # service. If SHIPSMART_MCP_URL is not configured, the advisor and
-    # orchestration routes will return 503 until it is set.
-    tool_registry = None
-    if settings.shipsmart_mcp_url:
-        try:
-            tool_registry = await create_remote_registry(
-                base_url=settings.shipsmart_mcp_url,
-                api_key=settings.shipsmart_mcp_api_key,
-            )
-            logger.info(
-                "Remote tool registry hydrated from MCP %s (%d tools)",
-                settings.shipsmart_mcp_url, tool_registry.count(),
-            )
-        except Exception as exc:
-            logger.error(
-                "Failed to hydrate remote tool registry from %s: %s. "
-                "Advisor/orchestration routes will return 503.",
-                settings.shipsmart_mcp_url, exc,
-            )
-    else:
-        logger.warning(
-            "SHIPSMART_MCP_URL is not set — advisor/orchestration routes "
-            "will return 503 until it is configured."
-        )
-    app.state.tool_registry = tool_registry
-
-    yield
-
-    if hasattr(vector_store, "disconnect"):
-        try:
-            await vector_store.disconnect()  # type: ignore[attr-defined]
-        except Exception as exc:
-            logger.warning("Vector store disconnect failed: %s", exc)
-    if tool_registry is not None:
-        try:
-            await tool_registry.aclose()
-        except Exception as exc:
-            logger.warning("Remote tool registry close failed: %s", exc)
-    await app.state.http_client.aclose()
-    logger.info("Shutting down %s", settings.app_name)
 
 
 app = FastAPI(
