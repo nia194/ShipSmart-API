@@ -231,7 +231,9 @@ async def _eval_query(q: HardQuery) -> QueryReport:
         turns += [_retrieve_turn(s) for s in q.sub_queries]
         turns.append(ToolCallResult(kind="final", text="answer"))
         agentic = await run_agent(
-            q.broad, {}, registry=_StubRegistry(), llm_router=_router(ScriptedToolCallingClient(turns)),
+            q.broad, {},
+            registry=_StubRegistry(),
+            llm_router=_router(ScriptedToolCallingClient(turns)),
             embedding_provider=_embedding(), vector_store=await _seeded_store(),
             max_retrievals=_EVAL_MAX_RETRIEVALS,
         )

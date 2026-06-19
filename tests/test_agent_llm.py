@@ -20,7 +20,6 @@ from app.llm.client import (
     build_provider_client,
 )
 
-
 # ── Non-native providers raise NotImplementedError ──────────────────────────
 
 

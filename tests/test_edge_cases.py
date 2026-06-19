@@ -18,8 +18,8 @@ from app.llm.errors import (
 )
 from app.llm.guardrails import assemble, detect_injection
 from app.llm.router import TASK_SYNTHESIS, LLMRouter
-from app.rag.iterative import _UNCOVERED_REFUSAL, iterative_rag
 from app.rag.hybrid import fuse
+from app.rag.iterative import _UNCOVERED_REFUSAL, iterative_rag
 from app.rag.vector_store import SearchResult
 
 
