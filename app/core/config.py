@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     rate_limit_orchestration: str = "20/minute"
     rate_limit_compare: str = "10/minute"
     rate_limit_agent: str = "10/minute"
+    rate_limit_compliance: str = "10/minute"
 
     # ── Agent (Concierge) ────────────────────────────────────────────────────
     # Model-driven, read-only tool-calling loop over the MCP tools + retrieve_rag.
@@ -96,6 +97,24 @@ class Settings(BaseSettings):
     # 1 = single-shot retrieval only (today's effective behavior); >1 enables the
     # bounded, conditional re-retrieval the agent triggers ONLY on weak coverage.
     agent_max_retrievals: int = 2       # cap on retrieve_rag calls per agent run
+
+    # ── Compliance (UC2) ─────────────────────────────────────────────────────
+    # Deterministic compliance analysis (structural rules + grounded, coverage-
+    # gated investigation of fixed areas) with an OPTIONAL model-driven critic
+    # that proposes gaps a single pass may have missed. The deterministic path
+    # has no LLM in its control flow; only the critic and the final summary call
+    # a model. Advisory only — never a legal/customs clearance.
+    compliance_enabled: bool = True     # gate POST /api/v1/compliance/check (404 when false)
+    # Rounds of the UC2 critic. 0 (default) = critic OFF: deterministic structural
+    # + fixed-area investigation only. >0 = the model proposes additional areas to
+    # investigate; an uncovered proposal becomes an honest "unverified" finding,
+    # never a fabricated flag (the load-bearing invariant).
+    compliance_critique_max_rounds: int = 0
+    # Max gap areas accepted from the critic per round (cost + blast-radius bound).
+    compliance_max_gap_areas: int = 3
+    # Declared value (USD) at/above which a commercial invoice is flagged for an
+    # international shipment (US EEI/AES filing threshold by default).
+    compliance_value_threshold_usd: float = 2500.0
 
     # ── ShipSmart MCP (tool server) ──────────────────────────────────────────
     # HTTP endpoint of the standalone ShipSmart-MCP service. Empty = no tools
