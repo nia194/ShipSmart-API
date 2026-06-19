@@ -6,8 +6,8 @@ import pytest
 
 import app.core.config as config_mod
 from app.llm.client import EchoClient
-from app.rag.iterative import _UNCOVERED_REFUSAL, iterative_rag
 from app.rag.embeddings import LocalHashEmbedding
+from app.rag.iterative import _UNCOVERED_REFUSAL, iterative_rag
 from app.rag.vector_store import InMemoryVectorStore, SearchResult
 from app.services.rag_service import rag_query
 

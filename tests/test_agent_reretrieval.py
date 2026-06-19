@@ -90,7 +90,10 @@ def _retrieve(call_query: str) -> ToolCallResult:
 
 
 def _retrieve_count(decisions: list[str]) -> int:
-    return sum(1 for d in decisions if d.startswith("agent:retrieve:") and d.split(":")[-1].isdigit())
+    return sum(
+        1 for d in decisions
+        if d.startswith("agent:retrieve:") and d.split(":")[-1].isdigit()
+    )
 
 
 # ── weak coverage triggers one justified re-retrieval ───────────────────────
