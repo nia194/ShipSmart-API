@@ -31,16 +31,16 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.errors import AppError
+from app.integrations.mcp_client import RemoteToolRegistry as ToolRegistry
 from app.llm.budget import estimate_tokens
 from app.llm.client import ToolCallResult
 from app.llm.guardrails import SAFE_REFUSAL, assemble
 from app.llm.prompts import ADVISOR_SYSTEM_PROMPT
 from app.llm.router import TASK_REASONING, TASK_SYNTHESIS, LLMRouter
-from app.rag.iterative import _covered as rag_covered
 from app.rag.embeddings import EmbeddingProvider
+from app.rag.grounding import CoverageSignal, coverage_of
 from app.rag.retrieval import retrieve_auto
 from app.rag.vector_store import SearchResult, VectorStore
-from app.services.mcp_client import RemoteToolRegistry as ToolRegistry
 from app.services.orchestration_service import execute_tool, select_tool_with_llm
 
 logger = logging.getLogger(__name__)
@@ -111,39 +111,6 @@ class AgentResult:
     sources: list[dict] = field(default_factory=list)
     decisions: list[str] = field(default_factory=list)
     provider: str = ""
-
-
-@dataclass
-class CoverageSignal:
-    """Quality signal the agent observes after a retrieval to decide whether the
-    result is strong enough or a re-retrieval is warranted.
-
-    Generic on purpose (a future tool could surface the same shape): it carries
-    the highest similarity among retrieved chunks, whether anything cleared the
-    deterministic RAG layer's grounding threshold, and how many chunks came back.
-    ``covered`` reuses the pure layer's grounding notion (``rag_covered``) so the
-    agent and the deterministic loop agree on what "covered" means.
-    """
-
-    top_score: float
-    covered: bool
-    chunk_count: int
-
-    def as_line(self) -> str:
-        return (
-            f"coverage: top_score={self.top_score:.3f} "
-            f"covered={'true' if self.covered else 'false'} "
-            f"chunks={self.chunk_count}"
-        )
-
-
-def coverage_of(results: list[SearchResult]) -> CoverageSignal:
-    """Read (do not change) the deterministic layer's per-chunk scores + grounding
-    threshold into an observable coverage signal for the agent."""
-    top = max((float(getattr(r, "score", 0.0) or 0.0) for r in results), default=0.0)
-    return CoverageSignal(
-        top_score=top, covered=rag_covered(results), chunk_count=len(results),
-    )
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -458,14 +425,19 @@ async def _text_fallback(
         decisions.append(f"agent:tool:{tool_name}")
         tools_used.append(tool_name)
         tool = registry.get(tool_name)
-        params = {p.name: context[p.name] for p in tool.parameters if p.name in context} if tool else {}
+        params = (
+            {p.name: context[p.name] for p in tool.parameters if p.name in context}
+            if tool else {}
+        )
         try:
             res = await execute_tool(tool_name, params, registry)
             tool_text_parts.append(f"{tool_name}: {res.answer}")
             steps_trace.append({"step": 1, "tool": tool_name, "observation": _truncate(res.answer)})
         except AppError as exc:
             tool_text_parts.append(f"{tool_name} error: {exc.message}")
-            steps_trace.append({"step": 1, "tool": tool_name, "observation": _truncate(exc.message)})
+            steps_trace.append(
+                {"step": 1, "tool": tool_name, "observation": _truncate(exc.message)}
+            )
 
     results, _mode = await retrieve_auto(
         query, embedding_provider, vector_store, top_k=settings.rag_top_k,

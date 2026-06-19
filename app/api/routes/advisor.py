@@ -13,6 +13,7 @@ from fastapi import APIRouter, Header, Request
 from app.core.config import settings
 from app.core.errors import AppError
 from app.core.rate_limit import limiter
+from app.integrations.java_client import JavaApiClient
 from app.llm.router import TASK_REASONING, TASK_SYNTHESIS, LLMRouter
 from app.schemas.advisor import (
     DecisionPath,
@@ -24,7 +25,6 @@ from app.schemas.advisor import (
     TrackingAdvisorRequest,
     TrackingAdvisorResponse,
 )
-from app.services.java_client import JavaApiClient
 from app.services.recommendation_service import generate_recommendations
 from app.services.shipping_advisor_service import get_shipping_advice
 from app.services.tracking_advisor_service import get_tracking_guidance

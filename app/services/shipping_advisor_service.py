@@ -17,6 +17,7 @@ import json
 import logging
 from dataclasses import dataclass
 
+from app.integrations.mcp_client import RemoteToolRegistry as ToolRegistry
 from app.llm.client import LLMClient
 from app.llm.guardrails import SAFE_REFUSAL, assemble
 from app.llm.prompts import ADVISOR_SYSTEM_PROMPT
@@ -24,7 +25,6 @@ from app.llm.router import TASK_REASONING, LLMRouter
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.retrieval import retrieve
 from app.rag.vector_store import SearchResult, VectorStore
-from app.services.mcp_client import RemoteToolRegistry as ToolRegistry
 from app.services.orchestration_service import execute_tool
 
 logger = logging.getLogger(__name__)
