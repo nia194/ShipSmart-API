@@ -16,8 +16,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from app.core.cache import recommendation_cache
+from app.integrations.java_client import JavaApiClient
 from app.llm.client import LLMClient
-from app.services.java_client import JavaApiClient
 
 logger = logging.getLogger(__name__)
 

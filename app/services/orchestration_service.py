@@ -16,9 +16,9 @@ from typing import Any
 
 from app.core.cache import TTLCache
 from app.core.errors import AppError
+from app.integrations.mcp_client import RemoteToolRegistry as ToolRegistry
+from app.integrations.mcp_client import ToolInput, ToolOutput
 from app.llm.client import LLMClient
-from app.services.mcp_client import RemoteToolRegistry as ToolRegistry
-from app.services.mcp_client import ToolInput, ToolOutput
 
 logger = logging.getLogger(__name__)
 
