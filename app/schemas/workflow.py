@@ -9,6 +9,8 @@ frozen domain models, surfaced directly. ``international`` is derived server-sid
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from app.domain.models import CarrierQuote, DutyQuote, GeneratedDoc, HsCandidate
@@ -32,6 +34,15 @@ class WorkflowProcessRequest(BaseModel):
     category: str | None = Field(default=None, max_length=120)
 
 
+class WorkflowReviewRequest(BaseModel):
+    """An officer's determination for a workflow awaiting human review (UC4)."""
+
+    determination: Literal["cleared", "blocked"] = Field(
+        ..., description="cleared → continue to documentation; blocked → terminate.",
+    )
+    note: str = Field(default="", max_length=2000, description="Reviewer note (audited).")
+
+
 class WorkflowResponse(BaseModel):
     """The finished (or current) workflow state, flattened for the API."""
 
@@ -45,6 +56,9 @@ class WorkflowResponse(BaseModel):
     recommended_carrier: CarrierQuote | None = None
     compliance: ComplianceSummary | None = None
     documents: list[GeneratedDoc] = Field(default_factory=list)
+    pending_review_areas: list[str] = Field(default_factory=list)
+    officer_determination: str = ""
+    officer_note: str = ""
     decisions: list[str] = Field(default_factory=list)
 
     @classmethod
@@ -60,5 +74,8 @@ class WorkflowResponse(BaseModel):
             recommended_carrier=state.recommended_carrier,
             compliance=state.compliance,
             documents=state.documents,
+            pending_review_areas=state.pending_review_areas,
+            officer_determination=state.officer_determination,
+            officer_note=state.officer_note,
             decisions=state.decisions,
         )
