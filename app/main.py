@@ -26,6 +26,7 @@ from app.api.routes import (
     info,
     orchestration,
     rag,
+    workflow,
 )
 from app.bootstrap import lifespan
 from app.core.config import settings
@@ -71,6 +72,7 @@ app.include_router(rag.router, prefix="/api/v1")
 app.include_router(advisor.router, prefix="/api/v1")
 app.include_router(agent.router, prefix="/api/v1")
 app.include_router(compliance.router, prefix="/api/v1")
+app.include_router(workflow.router, prefix="/api/v1")
 app.include_router(compare.router, prefix="/api")
 
 
