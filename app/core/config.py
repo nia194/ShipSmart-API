@@ -88,6 +88,7 @@ class Settings(BaseSettings):
     rate_limit_compare: str = "10/minute"
     rate_limit_agent: str = "10/minute"
     rate_limit_compliance: str = "10/minute"
+    rate_limit_workflow: str = "10/minute"
 
     # ── Agent (Concierge) ────────────────────────────────────────────────────
     # Model-driven, read-only tool-calling loop over the MCP tools + retrieve_rag.
@@ -115,6 +116,12 @@ class Settings(BaseSettings):
     # Declared value (USD) at/above which a commercial invoice is flagged for an
     # international shipment (US EEI/AES filing threshold by default).
     compliance_value_threshold_usd: float = 2500.0
+
+    # ── Workflow (UC3 / UC4) ─────────────────────────────────────────────────
+    # Multi-agent durable workflow: classify → (landed-cost ‖ routing) →
+    # compliance(+UC2) → documentation. OFF by default. Durability + the
+    # human-in-the-loop interrupt/resume land in Phase 3 (UC4).
+    workflow_enabled: bool = False      # gate POST /api/v1/workflow/process (404 when false)
 
     # ── ShipSmart MCP (tool server) ──────────────────────────────────────────
     # HTTP endpoint of the standalone ShipSmart-MCP service. Empty = no tools
