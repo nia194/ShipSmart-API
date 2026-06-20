@@ -29,6 +29,7 @@ stays observable even with no API keys, no database, and no tool server.
 - [Engineering highlights](#engineering-highlights)
 - [Spotlight: the Concierge agent](#spotlight-the-concierge-agent)
 - [Spotlight: compliance review (UC2)](#spotlight-compliance-review-uc2)
+- [Spotlight: the multi-agent workflow (UC3)](#spotlight-the-multi-agent-workflow-uc3)
 - [Retrieval modes](#retrieval-modes)
 - [The ShipSmart ecosystem](#the-shipsmart-ecosystem)
 - [What this service does](#what-this-service-does)
@@ -206,6 +207,77 @@ fixed areas under-cover, all visible in `decisions[]`.
 
 ---
 
+## Spotlight: the multi-agent workflow (UC3)
+
+`POST /api/v1/workflow/process` is the **second front door** — proactive and **multi-agent**.
+Where the Concierge answers one question, the workflow runs a shipment through a sequence of
+**specialist agents** and returns the assembled result with its full decision trail.
+
+```mermaid
+flowchart LR
+    IN["Shipment"] --> C["classify<br/>(HS code)"]
+    C --> P{"fork"}
+    P --> LC["landed-cost<br/>(duty + tax)"]
+    P --> R["routing<br/>(carrier pick)"]
+    LC --> J["join"]
+    R --> J
+    J --> COMP["compliance<br/>(+ UC2 critic)"]
+    COMP --> D["documentation<br/>(invoice · CN23)"]
+    D --> OUT["completed state<br/>+ decisions[]"]
+```
+
+**What makes it real architecture, not a script:**
+
+- **Hand-rolled, deterministic engine — no framework.** `StateMachineEngine` (behind a
+  `WorkflowEngine` Protocol) sequences nodes and forks the independent landed-cost + routing
+  stages with `asyncio.gather`, then **merges deterministically** (fixed node order) so the
+  result is reproducible regardless of which finishes first. **No `langgraph` dependency** — a
+  `LangGraphEngine` could drop in behind the same Protocol with zero change elsewhere.
+- **LLM at the edges, deterministic core.** Code sequences the stages and picks (top HS
+  candidate, cheapest carrier); the only model in the loop is the compliance stage (the UC2
+  critic + summary). Classification/duty/routing/docs are deterministic.
+- **Ports & adapters everywhere external.** Each agent depends on a `Protocol`
+  (`ClassificationProvider`, `DutyRateProvider`, `CarrierProvider`, `DocRenderer`), never a
+  concrete backend. The defaults are honest, clearly-labeled `Mock*` adapters over realistic
+  data tables in `app/domain/data/`; a real HS DB / duty engine / carrier API (via MCP) is a
+  future adapter — a swap, not a rewrite (`MCPCarrierAdapter` is the documented seam).
+- **One reused engine.** The compliance stage **is** the UC2 flow from the standalone
+  `/compliance/check` — wrapped as a node. Its `compliance:*` / `critique:*` tags fold into
+  the workflow's `decisions[]`, so the whole multi-agent run is one replayable trail.
+- **Everything off by default.** `WORKFLOW_ENABLED=false` ⇒ 404; a default run behaves exactly
+  as before.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/workflow/process \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "origin_country": "US", "destination_country": "BR",
+        "declared_value_usd": 600, "weight_lbs": 3,
+        "description": "camera drone with lithium battery"
+      }'
+```
+
+```jsonc
+{
+  "workflow_id": "5208e160b7a6…",
+  "status": "completed",
+  "hs_code": "8806", "hs_title": "Unmanned aircraft",
+  "landed_cost": {"duty_usd": 30.0, "tax_usd": 63.0, "total_landed_usd": 693.0, "trade_note": ""},
+  "recommended_carrier": {"carrier": "GlobalPost", "service": "Economy", "price_usd": 8.40, "estimated_days": 12},
+  "compliance": {"verdict": "action_required", "unverified_areas": ["lithium_battery", "import_restriction", …]},
+  "documents": ["packing_list", "commercial_invoice", "customs_declaration_cn23"],
+  "decisions": ["workflow:start", "workflow:classify:8806", "workflow:landed_cost:computed",
+                "workflow:routing:GlobalPost:Economy", "compliance:plan", …, "workflow:complete"]
+}
+```
+
+> **Phase status:** UC3 ships the `process` flow end to end. The durable lifecycle —
+> `GET /workflow/{id}`, `POST /workflow/{id}/review`, the unverified-high-risk **interrupt →
+> human review → resume**, and the SQLite checkpointer — is **UC4 (Phase 3)**; the seam is
+> already in the orchestrator.
+
+---
+
 ## Retrieval modes
 
 Retrieval scales with config; defaults reproduce the simplest path. The naming is honest:
@@ -277,6 +349,7 @@ re-issuing credentials.
 |---|---|---|
 | **Concierge agent** | `POST /api/v1/agent/run` | Model-driven reason→act→observe loop over MCP tools + `retrieve_rag`, with bounded conditional re-retrieval. Returns a grounded answer **+ full reasoning trace**. Read-only. See [spotlight](#spotlight-the-concierge-agent). |
 | **Compliance review (UC2)** | `POST /api/v1/compliance/check` | Deterministic structural + grounded-area analysis with an optional model-in-the-loop critic. Returns an **advisory** verdict + findings + decision trail. Uncovered ⇒ `unverified`, never a fabricated flag. See [spotlight](#spotlight-compliance-review-uc2). |
+| **Multi-agent workflow (UC3)** | `POST /api/v1/workflow/process` | Sequences specialist agents (classify → landed-cost ‖ routing → compliance(+UC2) → documentation) via a hand-rolled deterministic engine; ports & adapters behind every domain. OFF by default (`WORKFLOW_ENABLED`). See [spotlight](#spotlight-the-multi-agent-workflow-uc3). |
 | RAG query | `POST /api/v1/rag/query` | Embed → similarity search → LLM synthesis. Honors `RAG_MODE` / `RAG_HYBRID`. |
 | RAG ingest | `POST /api/v1/rag/ingest` | Loads `data/documents/*` into the vector store. Auto-runs on first boot when pgvector is empty. |
 | Shipping advisor | `POST /api/v1/advisor/shipping` | RAG + tool calls (`validate_address`, `get_quote_preview`) + LLM reasoning. |
@@ -287,7 +360,7 @@ re-issuing credentials.
 | Tool catalog | `GET /api/v1/orchestration/tools` | JSON Schemas for all registered tools. |
 | Service info | `GET /api/v1/info` | Returns service metadata (version, env, active providers). No secrets exposed. |
 | Liveness | `GET /health` | Liveness probe. |
-| Readiness | `GET /ready` | Reports resolved `rag_mode`, `rag_hybrid`, `guardrails_enabled`, `agent_enabled`, `compliance_enabled`, and per-task LLM failover chains — confirm the live wiring without reading logs. |
+| Readiness | `GET /ready` | Reports resolved `rag_mode`, `rag_hybrid`, `guardrails_enabled`, `agent_enabled`, `compliance_enabled`, `workflow_enabled`, and per-task LLM failover chains — confirm the live wiring without reading logs. |
 
 Interactive docs (dev only): `http://localhost:8000/docs`.
 
@@ -331,6 +404,10 @@ Interactive docs (dev only): `http://localhost:8000/docs`.
 | `app/api/routes/agent.py` · `app/schemas/agent.py` | `POST /api/v1/agent/run` route + request/response schemas (answer + reasoning trace). |
 | `app/agents/compliance/` | **The compliance flow (UC2)** — `structural.py` (pure rules), `areas.py` (fixed decomposition), `critic.py` (the optional model-in-the-loop `propose_gaps` step), `service.py` (the pipeline), `models.py` (domain types). Uncovered areas surface as honest `unverified` findings, never fabricated flags. |
 | `app/api/routes/compliance.py` · `app/schemas/compliance.py` | `POST /api/v1/compliance/check` route + schemas (advisory verdict + findings + decision trail). |
+| `app/domain/` | **Ports & adapters (UC3)** — `ports.py` (Classification/DutyRate/Carrier/DocRenderer Protocols), `models.py` (frozen `HsCandidate`/`DutyQuote`/`CarrierQuote`/`GeneratedDoc`), `adapters/` (deterministic `Mock*` + the `MCPCarrierAdapter` seam + `default_providers()`), `data/` (HS / duty / carrier mock tables). |
+| `app/agents/{classification,landed_cost,routing,documentation}_agent.py` | **Specialist agents (UC3)** — deterministic decision functions over the domain ports (pick top HS code, estimate landed cost, recommend a carrier, render docs). |
+| `app/workflow/` | **Orchestration (UC3)** — `state.py` (`WorkflowState`), `engine.py` (`WorkflowEngine` Protocol + hand-rolled `StateMachineEngine`, deterministic parallel merge), `nodes.py` (state↔agent adapters + `workflow:*` tags), `orchestrator.py` (`DurableWorkflow` stage graph). |
+| `app/api/routes/workflow.py` · `app/schemas/workflow.py` | `POST /api/v1/workflow/process` route + schemas (finished state + decision trail). |
 | `app/bootstrap.py` | Composition root — builds and wires every singleton (embedding, vector store, LLM router, RAG bundle, audit sink, MCP registry) onto `app.state`; `app/main.py` delegates its lifespan here. |
 | `app/rag/grounding.py` | Shared grounding primitive (`CoverageSignal` / `coverage_of` / `retrieve_area`) reused by the Concierge agent **and** the compliance flow. No LLM in its control flow. |
 | `app/core/audit.py` | Audit/tracing foundation — `AuditEvent` + swappable `AuditSink` (logging / in-memory); the compliance verdict is emitted here. |
@@ -544,6 +621,16 @@ COMPLIANCE_VALUE_THRESHOLD_USD=2500  # declared value (USD) that flags a commerc
 Advisory only — this endpoint assists a human reviewer and never declares a shipment
 "compliant" or "cleared". It needs no MCP tools (LLM router + RAG only).
 
+### Workflow (UC3)
+
+```env
+WORKFLOW_ENABLED=false               # gate POST /api/v1/workflow/process (404 when false)
+```
+
+Multi-agent durable workflow (classify → landed-cost ‖ routing → compliance(+UC2) →
+documentation). Like compliance it needs only the LLM router + RAG (the other stages use the
+deterministic mock domain adapters). Durability + human-in-the-loop config arrives in UC4.
+
 ### Shipping provider
 
 Carrier credentials (`SHIPPING_PROVIDER`, `UPS_*`, `FEDEX_*`, `DHL_*`,
@@ -572,6 +659,7 @@ RATE_LIMIT_ORCHESTRATION=20/minute # /orchestration/run
 RATE_LIMIT_COMPARE=10/minute       # /compare endpoint
 RATE_LIMIT_AGENT=10/minute         # /agent/run endpoint
 RATE_LIMIT_COMPLIANCE=10/minute    # /compliance/check endpoint
+RATE_LIMIT_WORKFLOW=10/minute      # /workflow/process endpoint
 ```
 
 Per IP, via slowapi. Returns HTTP 429 when exceeded.
@@ -682,6 +770,11 @@ curl -X POST http://localhost:8000/api/v1/agent/run \
 curl -X POST http://localhost:8000/api/v1/compliance/check \
   -H 'Content-Type: application/json' \
   -d '{"origin_country":"US","destination_country":"BR","declared_value_usd":600,"description":"camera drone with lithium battery"}'
+
+# multi-agent workflow (UC3 — set WORKFLOW_ENABLED=true; classify → landed-cost ‖ routing → compliance → docs)
+curl -X POST http://localhost:8000/api/v1/workflow/process \
+  -H 'Content-Type: application/json' \
+  -d '{"origin_country":"US","destination_country":"BR","declared_value_usd":600,"weight_lbs":3,"description":"camera drone with lithium battery"}'
 
 # recommendation (deterministic scoring)
 curl -X POST http://localhost:8000/api/v1/advisor/recommendation \
