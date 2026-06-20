@@ -119,9 +119,16 @@ class Settings(BaseSettings):
 
     # ── Workflow (UC3 / UC4) ─────────────────────────────────────────────────
     # Multi-agent durable workflow: classify → (landed-cost ‖ routing) →
-    # compliance(+UC2) → documentation. OFF by default. Durability + the
-    # human-in-the-loop interrupt/resume land in Phase 3 (UC4).
-    workflow_enabled: bool = False      # gate POST /api/v1/workflow/process (404 when false)
+    # compliance(+UC2) → documentation, with a durable human-in-the-loop
+    # interrupt on unverified high-risk shipments. OFF by default.
+    workflow_enabled: bool = False      # gate POST /api/v1/workflow/* (404 when false)
+    # Durability (UC4). false ⇒ InMemoryCheckpointer (process-lifetime);
+    # true ⇒ SqliteCheckpointer at workflow_checkpoint_path (survives restarts).
+    workflow_durable: bool = False
+    workflow_checkpoint_path: str = "workflow_checkpoints.db"
+    # Interrupt predicate: a compliance "unverified" area in this set suspends the
+    # workflow for human review. Empty ⇒ never interrupt (straight-through).
+    workflow_high_risk_areas: str = "lithium_battery,import_restriction"
 
     # ── ShipSmart MCP (tool server) ──────────────────────────────────────────
     # HTTP endpoint of the standalone ShipSmart-MCP service. Empty = no tools
@@ -188,6 +195,15 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @property
+    def workflow_high_risk_areas_set(self) -> frozenset[str]:
+        """Parse WORKFLOW_HIGH_RISK_AREAS (CSV) into a normalized set."""
+        return frozenset(
+            a.strip().lower()
+            for a in self.workflow_high_risk_areas.split(",")
+            if a.strip()
+        )
 
 
 # Singleton — import this wherever config is needed

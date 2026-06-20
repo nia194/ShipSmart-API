@@ -30,6 +30,7 @@ stays observable even with no API keys, no database, and no tool server.
 - [Spotlight: the Concierge agent](#spotlight-the-concierge-agent)
 - [Spotlight: compliance review (UC2)](#spotlight-compliance-review-uc2)
 - [Spotlight: the multi-agent workflow (UC3)](#spotlight-the-multi-agent-workflow-uc3)
+- [Spotlight: durability & human-in-the-loop (UC4)](#spotlight-durability--human-in-the-loop-uc4)
 - [Retrieval modes](#retrieval-modes)
 - [The ShipSmart ecosystem](#the-shipsmart-ecosystem)
 - [What this service does](#what-this-service-does)
@@ -271,10 +272,59 @@ curl -X POST http://localhost:8000/api/v1/workflow/process \
 }
 ```
 
-> **Phase status:** UC3 ships the `process` flow end to end. The durable lifecycle —
-> `GET /workflow/{id}`, `POST /workflow/{id}/review`, the unverified-high-risk **interrupt →
-> human review → resume**, and the SQLite checkpointer — is **UC4 (Phase 3)**; the seam is
-> already in the orchestrator.
+---
+
+## Spotlight: durability & human-in-the-loop (UC4)
+
+The workflow doesn't just run — it can **pause for a human and survive a restart**. When the
+compliance stage leaves a **high-risk area unverified** (`WORKFLOW_HIGH_RISK_AREAS`, default
+`lithium_battery, import_restriction`), the workflow checkpoints itself and suspends instead of
+guessing.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant W as Workflow
+    participant K as Checkpointer
+    participant O as Officer
+    C->>W: POST /workflow/process
+    W->>W: classify · landed-cost ‖ routing · compliance
+    W->>K: save state (awaiting_review)
+    W-->>C: { workflow_id, status: awaiting_review, pending_review_areas }
+    Note over W,O: …minutes or days later, possibly after a restart…
+    O->>W: POST /workflow/{id}/review { cleared | blocked }
+    W->>K: load state
+    W->>W: inject determination (in code) → documentation / terminate
+    W-->>O: { status: completed | blocked }
+```
+
+- **Interrupt, not guess.** An `unverified` high-risk area ⇒ `status="awaiting_review"`, a
+  `ReviewItem` enqueued, `workflow:interrupt:human_review` tagged, state checkpointed, suspend.
+- **Durable by a real swap.** `WorkflowCheckpointer` port with `InMemoryCheckpointer` (default)
+  and `SqliteCheckpointer` (`WORKFLOW_DURABLE=true`, stdlib `sqlite3`, **zero new deps**). The
+  full state round-trips through JSON, so resume reproduces it **exactly — even on a brand-new
+  process** (proven by a test and `scripts/workflow_eval.py`'s "kill & resume").
+- **The human is first-class in the audit trail.** The officer's `cleared`/`blocked` + note is
+  injected into the outcome **in code** (the model never authored it) and recorded as
+  `AuditEvent(actor="human", event="workflow:review:determination")` — "everything the system
+  *and* every person did," one replayable trail.
+- **`cleared`** continues to documentation and completes; **`blocked`** terminates at
+  `status="blocked"`. `GET /workflow/{id}` returns the current state at any point.
+
+```bash
+# 1) start → suspends on an unverified high-risk gap
+curl -sX POST localhost:8000/api/v1/workflow/process -H 'Content-Type: application/json' \
+  -d '{"origin_country":"US","destination_country":"BR","weight_lbs":3,"description":"camera drone with lithium battery"}'
+# → {"workflow_id":"…","status":"awaiting_review","pending_review_areas":["import_restriction","lithium_battery"]}
+
+# 2) officer clears it → resumes to completion
+curl -sX POST localhost:8000/api/v1/workflow/<id>/review -H 'Content-Type: application/json' \
+  -d '{"determination":"cleared","note":"checked ANATEL homologation"}'
+# → {"status":"completed","officer_determination":"cleared","documents":[…]}
+```
+
+`python scripts/workflow_eval.py` runs the whole lifecycle keyless (interrupt → block, and a
+SQLite kill-and-resume → clear) and prints `PASS`.
 
 ---
 
@@ -350,6 +400,7 @@ re-issuing credentials.
 | **Concierge agent** | `POST /api/v1/agent/run` | Model-driven reason→act→observe loop over MCP tools + `retrieve_rag`, with bounded conditional re-retrieval. Returns a grounded answer **+ full reasoning trace**. Read-only. See [spotlight](#spotlight-the-concierge-agent). |
 | **Compliance review (UC2)** | `POST /api/v1/compliance/check` | Deterministic structural + grounded-area analysis with an optional model-in-the-loop critic. Returns an **advisory** verdict + findings + decision trail. Uncovered ⇒ `unverified`, never a fabricated flag. See [spotlight](#spotlight-compliance-review-uc2). |
 | **Multi-agent workflow (UC3)** | `POST /api/v1/workflow/process` | Sequences specialist agents (classify → landed-cost ‖ routing → compliance(+UC2) → documentation) via a hand-rolled deterministic engine; ports & adapters behind every domain. OFF by default (`WORKFLOW_ENABLED`). See [spotlight](#spotlight-the-multi-agent-workflow-uc3). |
+| **Workflow durability + HITL (UC4)** | `GET /api/v1/workflow/{id}` · `POST /api/v1/workflow/{id}/review` | Inspect a workflow and submit an officer determination (`cleared`/`blocked`) for one suspended on an unverified high-risk gap. Durable resume via in-memory or SQLite checkpointer. See [spotlight](#spotlight-durability--human-in-the-loop-uc4). |
 | RAG query | `POST /api/v1/rag/query` | Embed → similarity search → LLM synthesis. Honors `RAG_MODE` / `RAG_HYBRID`. |
 | RAG ingest | `POST /api/v1/rag/ingest` | Loads `data/documents/*` into the vector store. Auto-runs on first boot when pgvector is empty. |
 | Shipping advisor | `POST /api/v1/advisor/shipping` | RAG + tool calls (`validate_address`, `get_quote_preview`) + LLM reasoning. |
@@ -360,7 +411,7 @@ re-issuing credentials.
 | Tool catalog | `GET /api/v1/orchestration/tools` | JSON Schemas for all registered tools. |
 | Service info | `GET /api/v1/info` | Returns service metadata (version, env, active providers). No secrets exposed. |
 | Liveness | `GET /health` | Liveness probe. |
-| Readiness | `GET /ready` | Reports resolved `rag_mode`, `rag_hybrid`, `guardrails_enabled`, `agent_enabled`, `compliance_enabled`, `workflow_enabled`, and per-task LLM failover chains — confirm the live wiring without reading logs. |
+| Readiness | `GET /ready` | Reports resolved `rag_mode`, `rag_hybrid`, `guardrails_enabled`, `agent_enabled`, `compliance_enabled`, `workflow_enabled`, `workflow_durable`, and per-task LLM failover chains — confirm the live wiring without reading logs. |
 
 Interactive docs (dev only): `http://localhost:8000/docs`.
 
@@ -406,8 +457,8 @@ Interactive docs (dev only): `http://localhost:8000/docs`.
 | `app/api/routes/compliance.py` · `app/schemas/compliance.py` | `POST /api/v1/compliance/check` route + schemas (advisory verdict + findings + decision trail). |
 | `app/domain/` | **Ports & adapters (UC3)** — `ports.py` (Classification/DutyRate/Carrier/DocRenderer Protocols), `models.py` (frozen `HsCandidate`/`DutyQuote`/`CarrierQuote`/`GeneratedDoc`), `adapters/` (deterministic `Mock*` + the `MCPCarrierAdapter` seam + `default_providers()`), `data/` (HS / duty / carrier mock tables). |
 | `app/agents/{classification,landed_cost,routing,documentation}_agent.py` | **Specialist agents (UC3)** — deterministic decision functions over the domain ports (pick top HS code, estimate landed cost, recommend a carrier, render docs). |
-| `app/workflow/` | **Orchestration (UC3)** — `state.py` (`WorkflowState`), `engine.py` (`WorkflowEngine` Protocol + hand-rolled `StateMachineEngine`, deterministic parallel merge), `nodes.py` (state↔agent adapters + `workflow:*` tags), `orchestrator.py` (`DurableWorkflow` stage graph). |
-| `app/api/routes/workflow.py` · `app/schemas/workflow.py` | `POST /api/v1/workflow/process` route + schemas (finished state + decision trail). |
+| `app/workflow/` | **Orchestration + durability (UC3/UC4)** — `state.py` (`WorkflowState`), `engine.py` (`WorkflowEngine` Protocol + hand-rolled `StateMachineEngine`, deterministic parallel merge), `nodes.py` (state↔agent adapters + `workflow:*` tags), `orchestrator.py` (`DurableWorkflow` stage graph + interrupt/resume), `checkpointer.py` (`WorkflowCheckpointer` port + InMemory/SQLite), `review_queue.py` (`ReviewQueue` port + InMemory). |
+| `app/api/routes/workflow.py` · `app/schemas/workflow.py` | `POST /process` · `GET /{id}` · `POST /{id}/review` routes + schemas (state, decision trail, review determination). |
 | `app/bootstrap.py` | Composition root — builds and wires every singleton (embedding, vector store, LLM router, RAG bundle, audit sink, MCP registry) onto `app.state`; `app/main.py` delegates its lifespan here. |
 | `app/rag/grounding.py` | Shared grounding primitive (`CoverageSignal` / `coverage_of` / `retrieve_area`) reused by the Concierge agent **and** the compliance flow. No LLM in its control flow. |
 | `app/core/audit.py` | Audit/tracing foundation — `AuditEvent` + swappable `AuditSink` (logging / in-memory); the compliance verdict is emitted here. |
@@ -621,15 +672,19 @@ COMPLIANCE_VALUE_THRESHOLD_USD=2500  # declared value (USD) that flags a commerc
 Advisory only — this endpoint assists a human reviewer and never declares a shipment
 "compliant" or "cleared". It needs no MCP tools (LLM router + RAG only).
 
-### Workflow (UC3)
+### Workflow (UC3 / UC4)
 
 ```env
-WORKFLOW_ENABLED=false               # gate POST /api/v1/workflow/process (404 when false)
+WORKFLOW_ENABLED=false               # gate /api/v1/workflow/* (404 when false)
+WORKFLOW_DURABLE=false               # false = in-memory checkpointer; true = SQLite (survives restarts)
+WORKFLOW_CHECKPOINT_PATH=workflow_checkpoints.db   # SQLite file when WORKFLOW_DURABLE=true
+WORKFLOW_HIGH_RISK_AREAS=lithium_battery,import_restriction  # unverified area here → human review
 ```
 
 Multi-agent durable workflow (classify → landed-cost ‖ routing → compliance(+UC2) →
-documentation). Like compliance it needs only the LLM router + RAG (the other stages use the
-deterministic mock domain adapters). Durability + human-in-the-loop config arrives in UC4.
+documentation) with a human-in-the-loop interrupt. Like compliance it needs only the LLM router
++ RAG (the other stages use the deterministic mock domain adapters). Set `WORKFLOW_HIGH_RISK_AREAS`
+empty to disable the interrupt (straight-through).
 
 ### Shipping provider
 
@@ -775,6 +830,12 @@ curl -X POST http://localhost:8000/api/v1/compliance/check \
 curl -X POST http://localhost:8000/api/v1/workflow/process \
   -H 'Content-Type: application/json' \
   -d '{"origin_country":"US","destination_country":"BR","declared_value_usd":600,"weight_lbs":3,"description":"camera drone with lithium battery"}'
+
+# workflow human-in-the-loop (UC4 — inspect a suspended workflow, then submit an officer determination)
+curl http://localhost:8000/api/v1/workflow/<workflow_id>
+curl -X POST http://localhost:8000/api/v1/workflow/<workflow_id>/review \
+  -H 'Content-Type: application/json' \
+  -d '{"determination":"cleared","note":"checked destination import rules"}'
 
 # recommendation (deterministic scoring)
 curl -X POST http://localhost:8000/api/v1/advisor/recommendation \
