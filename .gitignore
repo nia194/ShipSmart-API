@@ -54,6 +54,12 @@ instance/
 *.log
 logs/
 
+# ─── Workflow durable checkpointer (local SQLite, UC4) ────────────────────────
+workflow_checkpoints.db
+workflow_checkpoints.db-*
+*.sqlite
+*.sqlite3
+
 # ─── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
