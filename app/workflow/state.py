@@ -70,6 +70,13 @@ class WorkflowState(BaseModel):
     compliance: ComplianceSummary | None = None
     documents: list[GeneratedDoc] = Field(default_factory=list)
 
+    # ── Human-in-the-loop (UC4) ───────────────────────────────────────────────
+    # Set at the interrupt: the high-risk areas that could not be verified and so
+    # require a human determination. Officer fields are set on resume.
+    pending_review_areas: list[str] = Field(default_factory=list)
+    officer_determination: str = ""  # "" | "cleared" | "blocked"
+    officer_note: str = ""
+
     # ── Trail ─────────────────────────────────────────────────────────────────
     decisions: list[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=_now)

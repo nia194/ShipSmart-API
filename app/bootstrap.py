@@ -9,8 +9,9 @@ lifespan here so wiring lives in exactly one place and adapters can be swapped p
 environment without touching route or service code.
 
 Behavior is identical to the previous inline ``app.main`` lifespan (same order,
-logs, and ``app.state`` keys); the additions are ``app.state.audit_sink`` (P0)
-and ``app.state.domain`` (the UC3 mock domain providers, P2).
+logs, and ``app.state`` keys); the additions are ``app.state.audit_sink`` (P0),
+``app.state.domain`` (the UC3 mock domain providers, P2), and
+``app.state.workflow_checkpointer`` + ``app.state.review_queue`` (UC4, P3).
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ from app.llm.router import TASK_SYNTHESIS, create_llm_router
 from app.rag.embeddings import LocalHashEmbedding, create_embedding_provider
 from app.rag.ingestion import ingest_documents, load_documents
 from app.rag.vector_store import VectorStore, create_vector_store
+from app.workflow.checkpointer import create_checkpointer
+from app.workflow.review_queue import InMemoryReviewQueue
 
 logger = get_logger(__name__)
 
@@ -112,6 +115,17 @@ async def lifespan(app: FastAPI):
     # (classification, duty, carrier, doc rendering). Deterministic + keyless.
     app.state.domain = default_providers()
     logger.info("Domain providers wired (mock adapters)")
+
+    # Workflow durability + human-in-the-loop (UC4) — process-lifetime singletons
+    # so a suspended workflow can be resumed across requests / restarts.
+    app.state.workflow_checkpointer = create_checkpointer(
+        settings.workflow_durable, settings.workflow_checkpoint_path,
+    )
+    app.state.review_queue = InMemoryReviewQueue()
+    logger.info(
+        "Workflow durability wired: %s",
+        type(app.state.workflow_checkpointer).__name__,
+    )
 
     # Remote tool registry — hydrated from the standalone ShipSmart-MCP
     # service. If SHIPSMART_MCP_URL is not configured, the advisor and

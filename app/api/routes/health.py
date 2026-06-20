@@ -25,6 +25,7 @@ class ReadyResponse(BaseModel):
     agent_enabled: bool = True
     compliance_enabled: bool = True
     workflow_enabled: bool = False
+    workflow_durable: bool = False
     # Resolved LLM failover chain per task (provider names), e.g.
     # {"reasoning": ["openai", "gemini", "echo"], "synthesis": ["openai", "echo"]}.
     llm_chains: dict[str, list[str]] = Field(default_factory=dict)
@@ -55,5 +56,6 @@ async def ready(request: Request) -> ReadyResponse:
         agent_enabled=getattr(settings, "agent_enabled", True),
         compliance_enabled=getattr(settings, "compliance_enabled", True),
         workflow_enabled=getattr(settings, "workflow_enabled", False),
+        workflow_durable=getattr(settings, "workflow_durable", False),
         llm_chains=llm_router.describe_chains() if llm_router else {},
     )
