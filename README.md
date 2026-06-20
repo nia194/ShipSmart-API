@@ -353,7 +353,7 @@ siblings of this directory when working on the full system.
 |------|------|-------|
 | [ShipSmart-Web](https://github.com/nia194/ShipSmart-Web) | React SPA — user-facing UI | React 19, Vite, TypeScript |
 | [ShipSmart-Orchestrator](https://github.com/nia194/ShipSmart-Orchestrator) | Java transactional API — **single writer** to Supabase Postgres; quotes, bookings, saved options, carrier integration | Spring Boot 3.4, Java 17 |
-| **[ShipSmart-API](https://github.com/nia194/ShipSmart-API)** _(this repo)_ | Python AI/orchestration service — agent, RAG, advisors, recommendations | FastAPI, Python 3.13 |
+| **[ShipSmart-API](https://github.com/nia194/ShipSmart-API)** _(this repo)_ | Python AI/orchestration service — agent, RAG, advisors, recommendations, compliance (UC2), multi-agent workflow (UC3/UC4) | FastAPI, Python 3.13 |
 | [ShipSmart-MCP](https://github.com/nia194/ShipSmart-MCP) | MCP tool server — `validate_address`, `get_quote_preview` (provider-pluggable) | FastAPI + MCP |
 | [ShipSmart-Infra](https://github.com/nia194/ShipSmart-Infra) | Supabase migrations + edge functions, deployment configs, docs | Supabase, Render blueprints |
 
