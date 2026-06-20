@@ -9,7 +9,8 @@ lifespan here so wiring lives in exactly one place and adapters can be swapped p
 environment without touching route or service code.
 
 Behavior is identical to the previous inline ``app.main`` lifespan (same order,
-logs, and ``app.state`` keys); the only addition is ``app.state.audit_sink``.
+logs, and ``app.state`` keys); the additions are ``app.state.audit_sink`` (P0)
+and ``app.state.domain`` (the UC3 mock domain providers, P2).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from fastapi import FastAPI
 from app.core.audit import create_audit_sink
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.domain.adapters import default_providers
 from app.integrations.mcp_client import create_remote_registry
 from app.llm.router import TASK_SYNTHESIS, create_llm_router
 from app.rag.embeddings import LocalHashEmbedding, create_embedding_provider
@@ -105,6 +107,11 @@ async def lifespan(app: FastAPI):
     # Audit sink — emergent auditability made first-class (see app.core.audit).
     app.state.audit_sink = create_audit_sink(settings.audit_sink)
     logger.info("Audit sink: %s", type(app.state.audit_sink).__name__)
+
+    # Domain providers (UC3) — the swappable mock adapters behind the ports
+    # (classification, duty, carrier, doc rendering). Deterministic + keyless.
+    app.state.domain = default_providers()
+    logger.info("Domain providers wired (mock adapters)")
 
     # Remote tool registry — hydrated from the standalone ShipSmart-MCP
     # service. If SHIPSMART_MCP_URL is not configured, the advisor and
