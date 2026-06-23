@@ -45,6 +45,7 @@ stays observable even with no API keys, no database, and no tool server.
 - [Tests](#tests)
 - [Cross-service contracts](#cross-service-contracts)
 - [Operational notes](#operational-notes)
+- [Planned: Hybrid Form ⇄ Chat Sync](#planned-hybrid-form--chat-sync)
 - [License](#license)
 
 ---
@@ -921,6 +922,45 @@ them to both Java and MCP, so a single request can be `grep`'d end-to-end.
 - **RAG returns nothing relevant**: you're on `LocalHashEmbedding`. Set `EMBEDDING_PROVIDER=openai`. For exact-token misses (carrier/service codes), try `RAG_HYBRID=true`.
 - **RAG cleared on restart**: you're on `VECTOR_STORE_TYPE=memory`. Switch to `pgvector` + `DATABASE_URL`.
 - **CORS errors from the frontend**: the web origin (e.g. `http://localhost:5173`) must be in `CORS_ALLOWED_ORIGINS`.
+
+---
+
+## Planned: Hybrid Form ⇄ Chat Sync
+
+> **Status: planned — not yet implemented.** This section documents an upcoming
+> change so the contract is on record ahead of the code. Nothing below ships today —
+> the endpoint, slots, and behavior described here do not exist in this service yet.
+
+The goal: make the conventional shipment **form** (ShipSmart-Web) and a
+**conversational concierge chat** two views over **one shared shipment draft**, so
+whatever the user provides on either surface is instantly known to the other and the
+system never re-asks for a field it already has.
+
+**Depends on the (also-planned) Conversational Concierge** — a stateful, slot-filling
+chat endpoint (`POST /api/v1/concierge/chat`) carrying a `ConversationState` with
+typed `slots` and a pure `fold_turn` reducer. This is a **different surface** from the
+shipped [Concierge **agent**](#spotlight-the-concierge-agent) (`/agent/run`, a
+read-only reason→act→observe loop) and does not exist yet.
+
+This service's part of the sync is small — the bulk is the shared client-state model
+in ShipSmart-Web. Planned API-side behavior:
+
+- **`ConversationState.slots` becomes the shipment-context superset** — carrying every
+  field the form provides (`origin`, `destination`, `drop_off_date`, `delivery_date`,
+  `priority`, and the primary package fields: `weight_lbs`, dims, `category`/description,
+  `value_usd`). The client sends these from the form even before any chat turn.
+- **`fold_turn` merges, never overwrites with empty** — newest non-empty write wins;
+  extraction returns only newly-derived entities, and the response **echoes the full
+  merged state** so the client can patch the form fields.
+- **Pre-filled slots are treated as satisfied (the core "don't re-ask" behavior)** —
+  `run_concierge`'s required-slot check sees form-provided slots and routes straight to
+  the worker instead of emitting a `concierge:clarify:*` turn.
+- **Determinism unchanged.** Assembling a `Shipment` / advisor `context` from slots
+  stays pure code; field provenance is client-owned and never affects ranking, quoting,
+  or compliance verdicts.
+
+No new endpoint beyond the concierge, and **no Java/MCP change** — the draft is
+client-owned and the existing read-only `GET /shipments/{id}` hydration path is reused.
 
 ---
 
