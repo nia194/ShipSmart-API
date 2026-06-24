@@ -24,6 +24,7 @@ class ReadyResponse(BaseModel):
     guardrails_enabled: bool = True
     agent_enabled: bool = True
     compliance_enabled: bool = True
+    concierge_enabled: bool = False
     workflow_enabled: bool = False
     workflow_durable: bool = False
     # Resolved LLM failover chain per task (provider names), e.g.
@@ -55,6 +56,7 @@ async def ready(request: Request) -> ReadyResponse:
         guardrails_enabled=getattr(settings, "guardrails_enabled", True),
         agent_enabled=getattr(settings, "agent_enabled", True),
         compliance_enabled=getattr(settings, "compliance_enabled", True),
+        concierge_enabled=getattr(settings, "concierge_enabled", False),
         workflow_enabled=getattr(settings, "workflow_enabled", False),
         workflow_durable=getattr(settings, "workflow_durable", False),
         llm_chains=llm_router.describe_chains() if llm_router else {},
