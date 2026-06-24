@@ -1,0 +1,34 @@
+"""Request/response schemas for the Conversational Concierge endpoint.
+
+The ``state`` is client-owned and echoed verbatim each turn (no server store).
+Its ``slots`` are the shared shipment-context superset (form + chat).
+"""
+
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class ConciergeState(BaseModel):
+    """The conversation state echoed back to (and re-sent by) the client."""
+
+    slots: dict[str, Any] = Field(default_factory=dict)
+    intent: str | None = None
+    status: str = "gathering"
+    pending_clarification: str | None = None
+    turns: int = 0
+
+
+class ConciergeRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+    state: ConciergeState | None = None
+
+
+class ConciergeResponse(BaseModel):
+    reply: str
+    state: ConciergeState
+    clarification: str | None = None
+    dispatched_to: str | None = None
+    sources: list[dict] = Field(default_factory=list)
+    decisions: list[str] = Field(default_factory=list)
+    provider: str = ""

@@ -22,6 +22,7 @@ from app.api.routes import (
     agent,
     compare,
     compliance,
+    concierge,
     health,
     info,
     orchestration,
@@ -72,6 +73,7 @@ app.include_router(rag.router, prefix="/api/v1")
 app.include_router(advisor.router, prefix="/api/v1")
 app.include_router(agent.router, prefix="/api/v1")
 app.include_router(compliance.router, prefix="/api/v1")
+app.include_router(concierge.router, prefix="/api/v1")
 app.include_router(workflow.router, prefix="/api/v1")
 app.include_router(compare.router, prefix="/api")
 
