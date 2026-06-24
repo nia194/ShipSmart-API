@@ -89,6 +89,7 @@ class Settings(BaseSettings):
     rate_limit_agent: str = "10/minute"
     rate_limit_compliance: str = "10/minute"
     rate_limit_workflow: str = "10/minute"
+    rate_limit_concierge: str = "10/minute"
 
     # ── Agent (Concierge) ────────────────────────────────────────────────────
     # Model-driven, read-only tool-calling loop over the MCP tools + retrieve_rag.
@@ -98,6 +99,14 @@ class Settings(BaseSettings):
     # 1 = single-shot retrieval only (today's effective behavior); >1 enables the
     # bounded, conditional re-retrieval the agent triggers ONLY on weak coverage.
     agent_max_retrievals: int = 2       # cap on retrieve_rag calls per agent run
+
+    # ── Conversational Concierge (stateful chat) ─────────────────────────────
+    # Multi-turn, slot-filling chat (POST /api/v1/concierge/chat), distinct from
+    # the one-shot Agent above. Gathers shipment slots, never re-asks for known
+    # ones, then dispatches to an existing worker (compliance / the agent). The
+    # model only helps extract entities; decisions stay deterministic. OFF by default.
+    concierge_enabled: bool = False     # gate POST /api/v1/concierge/chat (404 when false)
+    concierge_max_turns: int = 12       # soft bound on a single conversation
 
     # ── Compliance (UC2) ─────────────────────────────────────────────────────
     # Deterministic compliance analysis (structural rules + grounded, coverage-

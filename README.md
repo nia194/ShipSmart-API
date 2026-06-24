@@ -5,14 +5,14 @@
 [![uv](https://img.shields.io/badge/uv-0.6%2B-DE5FE9?logo=python&logoColor=white)](https://docs.astral.sh/uv/)
 [![pgvector](https://img.shields.io/badge/pgvector-Postgres-336791?logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
 [![Claude](https://img.shields.io/badge/Claude-native%20tool--calling-D97757?logo=anthropic&logoColor=white)](#spotlight-the-concierge-agent)
-[![Tests](https://img.shields.io/badge/tests-280%20passing-3FB950?logo=pytest&logoColor=white)](#tests)
+[![Tests](https://img.shields.io/badge/tests-380%20passing-3FB950?logo=pytest&logoColor=white)](#tests)
 [![Deploy: Render](https://img.shields.io/badge/Deploy-Render-46E3B7?logo=render&logoColor=white)](https://render.com/)
 [![License](https://img.shields.io/badge/License-See%20LICENSE-blue)](./LICENSE)
 
 > An async **AI-orchestration microservice** that turns a multi-provider LLM stack into a
 > grounded shipping **concierge** — a model-driven **agent loop**, **hybrid + iterative RAG**,
 > **prompt-injection guardrails**, and **per-task provider failover** — all behind a
-> hermetic **280-test** suite.
+> hermetic **380-test** suite.
 
 AI / orchestration service for the ShipSmart shipping platform. Owns no transactional
 data; provides RAG-grounded shipping advice, a tool-calling concierge agent, tracking
@@ -45,7 +45,7 @@ stays observable even with no API keys, no database, and no tool server.
 - [Tests](#tests)
 - [Cross-service contracts](#cross-service-contracts)
 - [Operational notes](#operational-notes)
-- [Planned: Hybrid Form ⇄ Chat Sync](#planned-hybrid-form--chat-sync)
+- [Spotlight: the Conversational Concierge](#spotlight-the-conversational-concierge-form--chat-sync)
 - [License](#license)
 
 ---
@@ -62,7 +62,7 @@ The parts worth a closer look — each maps to real, tested code in this repo:
 | 🛡️ | **Prompt-injection guardrails + grounding** | All prompt assembly flows through one assembler (`app/llm/guardrails.py`): role separation, untrusted-data fencing, injection detection (block or neutralize), and **grounding** — answer only from retrieved data or refuse, never guess. |
 | 🔎 | **Retrieval that scales by config** | Single-shot dense → **hybrid** (dense + BM25/Postgres-lexical fusion) → **iterative** (bounded plan→retrieve→assess loop). All behind flags; defaults reproduce the simple path. |
 | 🔭 | **Observability built in** | W3C `traceparent` + `X-Request-Id` minted/propagated across every hop (Java, MCP), structured logging, a `decision_path` trace on every answer, and a `/ready` probe that reports the live wiring. |
-| 🧪 | **Hermetic-by-construction tests** | **280 tests in ~4s**, zero network, zero real keys — an autouse fixture pins every test to a self-contained profile. Includes an agentic eval harness (`scripts/agentic_eval.py`). |
+| 🧪 | **Hermetic-by-construction tests** | **380 tests in ~4s**, zero network, zero real keys — an autouse fixture pins every test to a self-contained profile. Includes an agentic eval harness (`scripts/agentic_eval.py`). |
 | 🧩 | **Polyglot microservice design** | One of five sibling services: this Python AI service alongside a Java/Spring transactional API, a React SPA, an MCP tool server, and a Supabase/Infra repo — communicating over typed HTTP contracts. |
 
 ---
@@ -402,6 +402,7 @@ re-issuing credentials.
 | **Compliance review (UC2)** | `POST /api/v1/compliance/check` | Deterministic structural + grounded-area analysis with an optional model-in-the-loop critic. Returns an **advisory** verdict + findings + decision trail. Uncovered ⇒ `unverified`, never a fabricated flag. See [spotlight](#spotlight-compliance-review-uc2). |
 | **Multi-agent workflow (UC3)** | `POST /api/v1/workflow/process` | Sequences specialist agents (classify → landed-cost ‖ routing → compliance(+UC2) → documentation) via a hand-rolled deterministic engine; ports & adapters behind every domain. OFF by default (`WORKFLOW_ENABLED`). See [spotlight](#spotlight-the-multi-agent-workflow-uc3). |
 | **Workflow durability + HITL (UC4)** | `GET /api/v1/workflow/{id}` · `POST /api/v1/workflow/{id}/review` | Inspect a workflow and submit an officer determination (`cleared`/`blocked`) for one suspended on an unverified high-risk gap. Durable resume via in-memory or SQLite checkpointer. See [spotlight](#spotlight-durability--human-in-the-loop-uc4). |
+| **Conversational Concierge** | `POST /api/v1/concierge/chat` | Stateful slot-filling chat: gathers shipment slots, never re-asks for known ones, dispatches to compliance / the agent, and echoes the full state for the form ⇄ chat sync. OFF by default (`CONCIERGE_ENABLED`). See [spotlight](#spotlight-the-conversational-concierge-form--chat-sync). |
 | RAG query | `POST /api/v1/rag/query` | Embed → similarity search → LLM synthesis. Honors `RAG_MODE` / `RAG_HYBRID`. |
 | RAG ingest | `POST /api/v1/rag/ingest` | Loads `data/documents/*` into the vector store. Auto-runs on first boot when pgvector is empty. |
 | Shipping advisor | `POST /api/v1/advisor/shipping` | RAG + tool calls (`validate_address`, `get_quote_preview`) + LLM reasoning. |
@@ -412,7 +413,7 @@ re-issuing credentials.
 | Tool catalog | `GET /api/v1/orchestration/tools` | JSON Schemas for all registered tools. |
 | Service info | `GET /api/v1/info` | Returns service metadata (version, env, active providers). No secrets exposed. |
 | Liveness | `GET /health` | Liveness probe. |
-| Readiness | `GET /ready` | Reports resolved `rag_mode`, `rag_hybrid`, `guardrails_enabled`, `agent_enabled`, `compliance_enabled`, `workflow_enabled`, `workflow_durable`, and per-task LLM failover chains — confirm the live wiring without reading logs. |
+| Readiness | `GET /ready` | Reports resolved `rag_mode`, `rag_hybrid`, `guardrails_enabled`, `agent_enabled`, `compliance_enabled`, `concierge_enabled`, `workflow_enabled`, `workflow_durable`, and per-task LLM failover chains — confirm the live wiring without reading logs. |
 
 Interactive docs (dev only): `http://localhost:8000/docs`.
 
@@ -661,6 +662,17 @@ AGENT_MAX_STEPS=5              # hard cost bound on the agent loop
 AGENT_MAX_RETRIEVALS=2         # cap on retrieve_rag calls per run (1 = single-shot; >1 enables re-retrieval)
 ```
 
+### Conversational Concierge (chat)
+
+```env
+CONCIERGE_ENABLED=false        # gate POST /api/v1/concierge/chat (404 when false)
+CONCIERGE_MAX_TURNS=12         # soft bound on a single conversation
+```
+
+Stateful slot-filling chat, distinct from the Agent above. Like compliance it needs only
+the LLM router + RAG (the compliance dispatch); quote/tracking/advice reuse the agent when
+the MCP tools are wired. Keyless-friendly; off by default.
+
 ### Compliance (UC2)
 
 ```env
@@ -716,6 +728,7 @@ RATE_LIMIT_COMPARE=10/minute       # /compare endpoint
 RATE_LIMIT_AGENT=10/minute         # /agent/run endpoint
 RATE_LIMIT_COMPLIANCE=10/minute    # /compliance/check endpoint
 RATE_LIMIT_WORKFLOW=10/minute      # /workflow/process endpoint
+RATE_LIMIT_CONCIERGE=10/minute     # /concierge/chat endpoint
 ```
 
 Per IP, via slowapi. Returns HTTP 429 when exceeded.
@@ -849,7 +862,7 @@ curl -X POST http://localhost:8000/api/v1/advisor/recommendation \
 ## Tests
 
 ```bash
-uv run pytest          # 280 tests, ~4s, no network / no real keys
+uv run pytest          # 380 tests, ~4s, no network / no real keys
 ```
 
 Tests live under `tests/` and use `pytest-asyncio` (async mode = auto).
@@ -869,6 +882,7 @@ the advisors, and `decision_path`. Service/seam coverage worth calling out:
 | File | Focus |
 | --- | --- |
 | `test_agent_service.py` · `test_agent_route.py` | The agent loop end-to-end + the `/agent/run` route (404 when disabled, 503 when registry/router missing). |
+| `test_concierge_state.py` · `test_concierge_service.py` · `test_concierge_route.py` | The concierge `fold_turn` reducer + deterministic extraction, the don't-re-ask dispatch, and the `/concierge/chat` route (404 when disabled, full-state echo). |
 | `test_agent_reretrieval.py` | Conditional, bounded re-retrieval: weak-coverage reformulation, degenerate-query rejection, and the per-run cap. |
 | `test_agent_llm.py` | Native tool-calling vs. the keyless text fallback (`NotImplementedError` → `select_tool_with_llm`). |
 | `test_guardrails.py` | Injection detection, fencing/neutralization, grounding, and output leak scanning. |
@@ -891,6 +905,7 @@ lockstep:
 | Caller | Endpoint | Used by |
 |---|---|---|
 | **Web → Python** | `POST /api/v1/agent/run` | Concierge agent — free-text shipping tasks; returns answer + reasoning trace. |
+| **Web → Python** | `POST /api/v1/concierge/chat` | Conversational concierge — stateful slot-filling chat; echoes the shipment `state` for the form ⇄ chat sync. |
 | **Web → Python** | `POST /api/v1/advisor/shipping` | Shipping advisor page. |
 | **Web → Python** | `POST /api/v1/advisor/tracking` | Tracking advisor page. |
 | **Web → Python** | `POST /api/v1/advisor/recommendation` | Recommendations widget. Frontend may send `services[]` directly **or** just `context.shipment_request_id` and let this service hydrate from Java. |
@@ -925,42 +940,43 @@ them to both Java and MCP, so a single request can be `grep`'d end-to-end.
 
 ---
 
-## Planned: Hybrid Form ⇄ Chat Sync
+## Spotlight: the Conversational Concierge (form ⇄ chat sync)
 
-> **Status: planned — not yet implemented.** This section documents an upcoming
-> change so the contract is on record ahead of the code. Nothing below ships today —
-> the endpoint, slots, and behavior described here do not exist in this service yet.
+`POST /api/v1/concierge/chat` is a **stateful, multi-turn** slot-filling chat — distinct
+from the one-shot [Concierge **agent**](#spotlight-the-concierge-agent) (`/agent/run`).
+It gathers the shipment **slots** over a few turns, **never re-asks for a slot it already
+has**, then dispatches to an existing deterministic worker. It is the server half of the
+**hybrid form ⇄ chat sync**: the ShipSmart-Web form and this chat are two views over one
+shared shipment draft.
 
-The goal: make the conventional shipment **form** (ShipSmart-Web) and a
-**conversational concierge chat** two views over **one shared shipment draft**, so
-whatever the user provides on either surface is instantly known to the other and the
-system never re-asks for a field it already has.
+**What makes it more than a chat wrapper:**
 
-**Depends on the (also-planned) Conversational Concierge** — a stateful, slot-filling
-chat endpoint (`POST /api/v1/concierge/chat`) carrying a `ConversationState` with
-typed `slots` and a pure `fold_turn` reducer. This is a **different surface** from the
-shipped [Concierge **agent**](#spotlight-the-concierge-agent) (`/agent/run`, a
-read-only reason→act→observe loop) and does not exist yet.
-
-This service's part of the sync is small — the bulk is the shared client-state model
-in ShipSmart-Web. Planned API-side behavior:
-
-- **`ConversationState.slots` becomes the shipment-context superset** — carrying every
-  field the form provides (`origin`, `destination`, `drop_off_date`, `delivery_date`,
-  `priority`, and the primary package fields: `weight_lbs`, dims, `category`/description,
-  `value_usd`). The client sends these from the form even before any chat turn.
-- **`fold_turn` merges, never overwrites with empty** — newest non-empty write wins;
-  extraction returns only newly-derived entities, and the response **echoes the full
+- **`ConversationState.slots` is the shipment-context superset** — carrying every
+  field the form provides (`origin`, `destination`, countries, dates, `priority`, and the
+  primary package fields: `weight_lbs`, dims, `category`/`description`, `declared_value_usd`).
+  The client sends these from the form even before any chat turn.
+- **`fold_turn` is a pure reducer** — empty never overwrites non-empty; newest non-empty
+  wins; an echoed value equivalent (after normalization) to the existing one is a no-op.
+  Extraction returns only newly-derived entities, and the response **echoes the full
   merged state** so the client can patch the form fields.
 - **Pre-filled slots are treated as satisfied (the core "don't re-ask" behavior)** —
-  `run_concierge`'s required-slot check sees form-provided slots and routes straight to
+  `run_concierge`'s required-slot check sees form-provided slots and dispatches straight to
   the worker instead of emitting a `concierge:clarify:*` turn.
-- **Determinism unchanged.** Assembling a `Shipment` / advisor `context` from slots
-  stays pure code; field provenance is client-owned and never affects ranking, quoting,
-  or compliance verdicts.
+- **Deterministic dispatch.** Compliance assembles a `Shipment` → the UC2 flow; quote /
+  tracking / open questions route to the read-only **agent**. The model only helps
+  *extract* entities (with a keyless regex fallback) — it never quotes, books, or decides;
+  assembling a worker's typed input is pure code.
+- **Off by default + keyless.** `CONCIERGE_ENABLED=false` ⇒ 404; the whole loop runs on
+  the `EchoClient` + a deterministic regex extractor (no keys) for demos and CI.
 
-No new endpoint beyond the concierge, and **no Java/MCP change** — the draft is
-client-owned and the existing read-only `GET /shipments/{id}` hydration path is reused.
+```bash
+curl -X POST http://localhost:8000/api/v1/concierge/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"ship from Atlanta to Seattle, 12 lb","state":null}'
+```
+
+No Java/MCP change — the draft is client-owned and the existing read-only
+`GET /shipments/{id}` hydration path is reused.
 
 ---
 
