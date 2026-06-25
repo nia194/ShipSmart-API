@@ -15,6 +15,9 @@ class InfoResponse(BaseModel):
     llm_provider: str
     rag_provider: str
     embedding_provider: str
+    # Shipping-scope policy — the source of truth the frontend + siblings read.
+    shipping_scope: str
+    domestic_country: str
 
 
 @router.get("/info", response_model=InfoResponse, tags=["info"])
@@ -27,4 +30,6 @@ async def info() -> InfoResponse:
         llm_provider=settings.llm_provider or "(not configured)",
         rag_provider=settings.rag_provider or "(not configured)",
         embedding_provider=settings.embedding_provider or "(not configured)",
+        shipping_scope=settings.shipping_scope,
+        domestic_country=settings.home_country,
     )

@@ -95,6 +95,23 @@ def test_compliance_check_404_when_disabled(monkeypatch):
     assert client.post("/api/v1/compliance/check", json=_VALID).status_code == 404
 
 
+# ── Shipping scope (domestic-only deployment) ─────────────────────────────────
+
+
+def test_compliance_check_422_cross_border_when_domestic(monkeypatch):
+    monkeypatch.setattr(config_mod.settings, "shipping_scope", "domestic", raising=False)
+    monkeypatch.setattr(config_mod.settings, "domestic_country", "US", raising=False)
+    # _VALID is US -> DE → cross-border → rejected in a domestic-only deployment.
+    assert client.post("/api/v1/compliance/check", json=_VALID).status_code == 422
+
+
+def test_compliance_check_allows_domestic_shipment_when_domestic(monkeypatch):
+    monkeypatch.setattr(config_mod.settings, "shipping_scope", "domestic", raising=False)
+    monkeypatch.setattr(config_mod.settings, "domestic_country", "US", raising=False)
+    domestic = {**_VALID, "destination_country": "US"}
+    assert client.post("/api/v1/compliance/check", json=domestic).status_code == 200
+
+
 # ── /ready surfaces compliance_enabled ────────────────────────────────────────
 
 
