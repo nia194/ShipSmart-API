@@ -17,6 +17,7 @@ from app.agents.concierge.models import ConciergeResult, ConversationState, Slot
 from app.agents.concierge.state import clarification_for, fold_turn, missing_required
 from app.core.audit import AuditSink
 from app.core.config import settings
+from app.core.scope import violates_domestic_scope
 from app.llm.router import LLMRouter
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.vector_store import VectorStore
@@ -47,9 +48,16 @@ def _advisor_context(slots: Slots) -> dict:
 
 
 def _shipment_from_slots(slots: Slots) -> Shipment:
+    # Domestic-only deployments pin both ends to the home country; worldwide keeps
+    # the legacy default of US when a country slot is unfilled.
+    if settings.is_domestic_scope:
+        origin = destination = settings.home_country
+    else:
+        origin = slots.get("origin_country") or "US"
+        destination = slots.get("destination_country") or "US"
     return Shipment(
-        origin_country=(slots.get("origin_country") or "US"),
-        destination_country=(slots.get("destination_country") or "US"),
+        origin_country=origin,
+        destination_country=destination,
         declared_value_usd=float(slots.get("declared_value_usd") or 0.0),
         weight_lbs=float(slots.get("weight_lbs") or 0.0),
         description=(slots.get("description") or ""),
@@ -78,7 +86,26 @@ async def run_concierge(
     state = state.with_(intent=intent, turns=state.turns + 1)
     decisions.append(f"concierge:intent:{intent}")
 
+    # Domestic-only: a user who explicitly named an international origin/destination
+    # gets an honest "we ship domestically" reply rather than a silent rewrite.
+    offending = violates_domestic_scope(
+        state.slots.get("origin_country", ""), state.slots.get("destination_country", ""),
+    )
+    if offending is not None:
+        decisions.append("concierge:scope:domestic_only")
+        reply = (
+            f"I can only help with shipments within {settings.home_country} on this "
+            f"deployment — {offending} isn't supported."
+        )
+        return ConciergeResult(
+            reply=reply, state=state.with_(status="answered"),
+            dispatched_to="scope_blocked", decisions=decisions,
+        )
+
     missing = missing_required(state.slots, intent)
+    # Domestic-only: destination country defaults to home, so never ask for it.
+    if settings.is_domestic_scope:
+        missing = [slot for slot in missing if slot != "destination_country"]
     if missing:
         slot = missing[0]
         clarification = clarification_for(slot)
