@@ -100,6 +100,26 @@ async def test_domestic_shipment_single_document():
     assert [doc.doc_type for doc in state.documents] == ["packing_list"]
 
 
+async def test_explicit_compliance_off_skips_stage_and_completes():
+    deps = WorkflowDeps(
+        providers=_deps().providers,
+        llm_router=_deps().llm_router,
+        embedding_provider=_FixedEmbedding(),
+        vector_store=InMemoryVectorStore(),
+        compliance_explicit_enabled=False,
+        # Even with a high-risk area configured, no interrupt can fire (no findings).
+        high_risk_areas=frozenset({"lithium_battery"}),
+    )
+    wf = DurableWorkflow(engine=StateMachineEngine(), deps=deps)
+    state = await wf.process(_state())
+
+    assert state.status == "completed"          # straight through, no interrupt
+    assert state.compliance is None             # explicit pass never ran
+    assert "workflow:compliance:explicit_skipped" in state.decisions
+    assert not any(d == "compliance:plan" for d in state.decisions)
+    assert len(state.documents) == 3            # docs still generated
+
+
 # ── engine: parallel fork merges deterministically ────────────────────────────
 
 

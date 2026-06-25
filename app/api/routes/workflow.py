@@ -83,6 +83,7 @@ def _build_workflow(request: Request) -> DurableWorkflow:
             vector_store=rag["vector_store"],
             audit_sink=getattr(request.app.state, "audit_sink", None),
             compliance_critique_max_rounds=settings.compliance_critique_max_rounds,
+            compliance_explicit_enabled=settings.compliance_explicit_enabled,
             checkpointer=_checkpointer(request),
             review_queue=_review_queue(request),
             high_risk_areas=settings.workflow_high_risk_areas_set,
