@@ -24,6 +24,7 @@ from fastapi import APIRouter, Request
 from app.core.config import settings
 from app.core.errors import AppError
 from app.core.rate_limit import limiter
+from app.core.scope import enforce_scope
 from app.domain.adapters import DomainProviders, default_providers
 from app.llm.router import LLMRouter
 from app.schemas.workflow import (
@@ -98,6 +99,8 @@ async def process_workflow(
 ) -> WorkflowResponse:
     """Run a shipment through the workflow; may suspend for human review."""
     _require_enabled()
+    # Domestic-only deployments reject cross-border shipments (no-op when worldwide).
+    enforce_scope(body.origin_country, body.destination_country)
     workflow = _build_workflow(request)
     state = WorkflowState(
         workflow_id=uuid.uuid4().hex,
