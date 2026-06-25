@@ -28,6 +28,17 @@ class Settings(BaseSettings):
     # (in-process capture, mainly for tests). A persistent backend is a future adapter.
     audit_sink: str = "logging"
 
+    # ── Shipping scope (platform policy) ─────────────────────────────────────
+    # Deployment-level policy: does this deployment ship internationally or only
+    # within one country? "worldwide" (default) = today's behavior (cross-border
+    # allowed; international derived per shipment). "domestic" = only deliveries
+    # within DOMESTIC_COUNTRY are possible; the API rejects cross-border requests
+    # (422) and the concierge degrades to a domestic-only reply. This is the single
+    # source of truth; the API publishes it on GET /api/v1/info and the siblings
+    # (Web/Orchestrator/MCP) read/enforce the same value.
+    shipping_scope: str = "worldwide"   # "worldwide" | "domestic"
+    domestic_country: str = "US"        # ISO-3166 alpha-2 home country when domestic
+
     # ── Internal service-to-service ─────────────────────────────────────────
     internal_java_api_url: str = "http://localhost:8080"
 
@@ -213,6 +224,16 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @property
+    def home_country(self) -> str:
+        """The configured domestic home country, normalized to upper ISO-2."""
+        return (self.domestic_country or "US").strip().upper()
+
+    @property
+    def is_domestic_scope(self) -> bool:
+        """True when the deployment only ships within the home country."""
+        return self.shipping_scope.strip().lower() == "domestic"
 
     @property
     def workflow_high_risk_areas_set(self) -> frozenset[str]:
