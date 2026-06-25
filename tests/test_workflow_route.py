@@ -81,6 +81,16 @@ def test_process_completes_when_no_high_risk_configured(monkeypatch):
     assert "workflow:complete" in data["decisions"]
 
 
+# ── Shipping scope (domestic-only deployment) ─────────────────────────────────
+
+
+def test_process_422_cross_border_when_domestic(monkeypatch):
+    monkeypatch.setattr(config_mod.settings, "shipping_scope", "domestic", raising=False)
+    monkeypatch.setattr(config_mod.settings, "domestic_country", "US", raising=False)
+    # _VALID is US -> DE → rejected before the workflow runs.
+    assert client.post("/api/v1/workflow/process", json=_VALID).status_code == 422
+
+
 # ── GET /{id} ─────────────────────────────────────────────────────────────────
 
 

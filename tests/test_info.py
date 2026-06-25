@@ -17,6 +17,9 @@ def test_info_returns_metadata():
     assert "llm_provider" in data
     assert "rag_provider" in data
     assert "embedding_provider" in data
+    # Shipping-scope policy is published here for the frontend + siblings to read.
+    assert data["shipping_scope"] == "worldwide"   # default
+    assert data["domestic_country"] == "US"
 
 
 def test_info_does_not_leak_secrets():
