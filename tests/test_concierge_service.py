@@ -41,6 +41,21 @@ async def test_does_not_reask_when_slots_present():
     assert res.state.status == "answered"
 
 
+async def test_compliance_intent_falls_through_when_explicit_off(monkeypatch):
+    # Switch off ⇒ the explicit compliance pass is skipped; the compliance intent
+    # falls through to the normal flow (no tool_registry here ⇒ summary fallback).
+    import app.agents.concierge.service as svc
+
+    monkeypatch.setattr(svc.settings, "compliance_explicit_enabled", False)
+    state = ConversationState(
+        slots={"destination_country": "BR", "description": "camera drone"},
+        intent="compliance",
+    )
+    res = await run_concierge("is this compliant?", state, **_deps())
+    assert res.dispatched_to != "compliance"
+    assert "concierge:compliance:explicit_skipped" in res.decisions
+
+
 async def test_merges_and_echoes_full_state():
     state = ConversationState(slots={"origin": "Atlanta, GA"})
     res = await run_concierge("ship from Atlanta to Seattle weighing 10 lb", state, **_deps())

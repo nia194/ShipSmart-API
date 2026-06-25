@@ -115,6 +115,15 @@ class Settings(BaseSettings):
     # has no LLM in its control flow; only the critic and the final summary call
     # a model. Advisory only — never a legal/customs clearance.
     compliance_enabled: bool = True     # gate POST /api/v1/compliance/check (404 when false)
+    # Additive feature switch for the EXPLICIT compliance pass when it is reachable
+    # from the chat (concierge) and durable workflow paths. True ⇒ the hard UC2 pass
+    # runs as an extra layer on top of the normal flow. False ⇒ the normal flow runs
+    # by itself: the explicit pass is skipped, but the always-on lightweight checks
+    # (guardrails + RAG grounding over the compliance corpus) still apply. Distinct
+    # from compliance_enabled, which only gates the standalone /compliance/check
+    # endpoint. NOTE: when false, the workflow's high-risk HITL interrupt cannot fire
+    # (it lives inside the explicit pass) — intentional, with a startup warning.
+    compliance_explicit_enabled: bool = True
     # Rounds of the UC2 critic. 0 (default) = critic OFF: deterministic structural
     # + fixed-area investigation only. >0 = the model proposes additional areas to
     # investigate; an uncovered proposal becomes an honest "unverified" finding,

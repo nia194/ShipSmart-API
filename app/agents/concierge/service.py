@@ -16,6 +16,7 @@ from app.agents.concierge.extract import extract
 from app.agents.concierge.models import ConciergeResult, ConversationState, Slots
 from app.agents.concierge.state import clarification_for, fold_turn, missing_required
 from app.core.audit import AuditSink
+from app.core.config import settings
 from app.llm.router import LLMRouter
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.vector_store import VectorStore
@@ -113,7 +114,14 @@ async def _dispatch(
 ) -> ConciergeResult:
     decisions.append(f"concierge:dispatch:{intent}")
 
-    if intent == "compliance":
+    # The explicit compliance pass is an additive feature. When switched off, a
+    # compliance intent falls through to the normal agent/RAG path below — still
+    # grounded by the compliance corpus + guardrails (the lightweight default
+    # checks), just without the hard UC2 verdict.
+    if intent == "compliance" and not settings.compliance_explicit_enabled:
+        decisions.append("concierge:compliance:explicit_skipped")
+
+    if intent == "compliance" and settings.compliance_explicit_enabled:
         result = await check_compliance(
             _shipment_from_slots(state.slots),
             llm_router=llm_router, embedding_provider=embedding_provider,
