@@ -21,6 +21,7 @@ from app.agents.compliance import Shipment, check_compliance
 from app.core.config import settings
 from app.core.errors import AppError
 from app.core.rate_limit import limiter
+from app.core.scope import enforce_scope
 from app.llm.router import LLMRouter
 from app.schemas.compliance import (
     ComplianceFinding,
@@ -53,6 +54,9 @@ async def check_compliance_endpoint(
     rag = getattr(request.app.state, "rag", None)
     if rag is None:
         raise AppError(status_code=503, message="RAG pipeline is not initialized")
+
+    # Domestic-only deployments reject cross-border shipments (no-op when worldwide).
+    enforce_scope(body.origin_country, body.destination_country)
 
     shipment = Shipment(
         origin_country=body.origin_country,

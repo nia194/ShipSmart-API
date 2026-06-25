@@ -56,6 +56,34 @@ async def test_compliance_intent_falls_through_when_explicit_off(monkeypatch):
     assert "concierge:compliance:explicit_skipped" in res.decisions
 
 
+async def test_domestic_scope_blocks_international_destination(monkeypatch):
+    # Domestic deployment + an explicit international destination ⇒ graceful refusal.
+    import app.agents.concierge.service as svc
+
+    monkeypatch.setattr(svc.settings, "shipping_scope", "domestic", raising=False)
+    monkeypatch.setattr(svc.settings, "domestic_country", "US", raising=False)
+    state = ConversationState(
+        slots={"destination_country": "DE", "description": "camera drone"},
+        intent="compliance",
+    )
+    res = await run_concierge("is this compliant?", state, **_deps())
+    assert res.dispatched_to == "scope_blocked"
+    assert "concierge:scope:domestic_only" in res.decisions
+
+
+async def test_domestic_scope_skips_destination_clarification(monkeypatch):
+    # destination_country is normally required for compliance; domestic mode defaults
+    # it to home, so the concierge must not stop to ask for it.
+    import app.agents.concierge.service as svc
+
+    monkeypatch.setattr(svc.settings, "shipping_scope", "domestic", raising=False)
+    monkeypatch.setattr(svc.settings, "domestic_country", "US", raising=False)
+    state = ConversationState(slots={"description": "phone charger"}, intent="compliance")
+    res = await run_concierge("is this compliant?", state, **_deps())
+    assert not any(d.startswith("concierge:clarify:") for d in res.decisions)
+    assert res.dispatched_to == "compliance"
+
+
 async def test_merges_and_echoes_full_state():
     state = ConversationState(slots={"origin": "Atlanta, GA"})
     res = await run_concierge("ship from Atlanta to Seattle weighing 10 lb", state, **_deps())
