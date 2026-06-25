@@ -126,6 +126,13 @@ async def lifespan(app: FastAPI):
         "Workflow durability wired: %s",
         type(app.state.workflow_checkpointer).__name__,
     )
+    if not settings.compliance_explicit_enabled and settings.workflow_enabled:
+        logger.warning(
+            "COMPLIANCE_EXPLICIT_ENABLED is off while WORKFLOW_ENABLED is on: the "
+            "explicit compliance pass and its high-risk human-review interrupt "
+            "(e.g. %s) will be SKIPPED. Only lightweight guardrail/RAG checks apply.",
+            settings.workflow_high_risk_areas,
+        )
 
     # Remote tool registry — hydrated from the standalone ShipSmart-MCP
     # service. If SHIPSMART_MCP_URL is not configured, the advisor and

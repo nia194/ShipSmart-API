@@ -57,6 +57,11 @@ class WorkflowDeps:
     vector_store: VectorStore
     audit_sink: AuditSink | None = None
     compliance_critique_max_rounds: int | None = None
+    # Additive explicit-compliance feature switch. False ⇒ skip the compliance
+    # stage entirely; the workflow runs the rest of the graph straight through.
+    # The high-risk HITL interrupt cannot fire when this is off (it depends on the
+    # explicit pass's findings) — intentional.
+    compliance_explicit_enabled: bool = True
     # UC4. ``high_risk_areas`` empty ⇒ never interrupt (the Phase 2 behavior).
     checkpointer: WorkflowCheckpointer | None = None
     review_queue: ReviewQueue | None = None
@@ -72,6 +77,7 @@ class DurableWorkflow:
         self._checkpointer = deps.checkpointer or InMemoryCheckpointer()
         self._review_queue = deps.review_queue or InMemoryReviewQueue()
         self._high_risk_areas = deps.high_risk_areas
+        self._compliance_explicit_enabled = deps.compliance_explicit_enabled
         self._classify = classification_node(deps.providers.classification)
         self._landed_cost = landed_cost_node(deps.providers.duty)
         self._routing = routing_node(deps.providers.carrier)
@@ -95,12 +101,19 @@ class DurableWorkflow:
 
         state = await self._engine.run_step(state, self._classify)
         state = await self._engine.run_parallel(state, [self._landed_cost, self._routing])
-        state = await self._engine.run_step(state, self._compliance)
 
-        # ── UC4 interrupt: unverified high-risk area → human review ────────────
-        gaps = self._high_risk_gaps(state)
-        if gaps:
-            return self._interrupt(state, gaps)
+        if self._compliance_explicit_enabled:
+            state = await self._engine.run_step(state, self._compliance)
+
+            # ── UC4 interrupt: unverified high-risk area → human review ────────
+            gaps = self._high_risk_gaps(state)
+            if gaps:
+                return self._interrupt(state, gaps)
+        else:
+            # Explicit compliance feature off: skip the hard pass (and therefore the
+            # HITL interrupt). The normal flow's lightweight checks still applied
+            # upstream; record the deliberate skip on the trail.
+            state.decisions.append("workflow:compliance:explicit_skipped")
 
         state = await self._engine.run_step(state, self._documentation)
         return self._finish(state)
