@@ -81,6 +81,23 @@ services:
         value: "500"
       - key: RAG_CHUNK_OVERLAP
         value: "50"
+      # ── Conversational Concierge (setup assistant + durable recall) ───────
+      # Gates POST /api/v1/concierge/chat (404 when false). The Web homepage
+      # mounts the concierge by default, so this must be "true" in production.
+      - key: CONCIERGE_ENABLED
+        value: "true"
+      # Durable cross-reload recall. "postgres" uses DATABASE_URL above and
+      # REQUIRES the conversations migration applied to Supabase
+      # (supabase/migrations/20260626120000_create_conversations.sql). Use
+      # "memory" to disable persistence (recall lost on instance restart).
+      - key: CONVERSATION_STORE
+        value: postgres
+      - key: CONVERSATION_MAX_MESSAGES
+        value: "50"
+      # Multi-agent compliance/workflow bridge — OFF by default (functional when
+      # flipped to "true"); also gates POST /api/v1/workflow/*.
+      - key: WORKFLOW_ENABLED
+        value: "false"
       # ── ShipSmart MCP (tool server) ───────────────────────────────────────
       - key: SHIPSMART_MCP_URL
         value: https://shipsmart-mcp.onrender.com
