@@ -87,7 +87,7 @@ async def test_compose_ready_summary_suggests_next_action():
 async def test_correction_overwrites_and_is_acknowledged(monkeypatch):
     import app.agents.concierge.service as svc
 
-    async def fake_nlu(message, prior, router, *, request_id=""):
+    async def fake_nlu(message, prior, router, *, reference_block="", request_id=""):
         return NluResult(intent="quote", intents=["quote"], slots={},
                          corrections={"weight_lbs": 15.0}, ambiguities=[])
 
@@ -105,7 +105,7 @@ async def test_correction_overwrites_and_is_acknowledged(monkeypatch):
 async def test_disambiguation_when_required_slot_is_vague(monkeypatch):
     import app.agents.concierge.service as svc
 
-    async def fake_nlu(message, prior, router, *, request_id=""):
+    async def fake_nlu(message, prior, router, *, reference_block="", request_id=""):
         return NluResult(intent="quote", intents=["quote"], slots={},
                          corrections={}, ambiguities=["origin"])
 
@@ -122,7 +122,7 @@ async def test_disambiguation_when_required_slot_is_vague(monkeypatch):
 async def test_compound_intent_prefers_compliance(monkeypatch):
     import app.agents.concierge.service as svc
 
-    async def fake_nlu(message, prior, router, *, request_id=""):
+    async def fake_nlu(message, prior, router, *, reference_block="", request_id=""):
         return NluResult(intent="quote", intents=["quote", "compliance"], slots={},
                          corrections={}, ambiguities=[])
 

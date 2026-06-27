@@ -21,7 +21,24 @@ import pytest
 import pytest_asyncio
 
 from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.services.mcp_client import RemoteToolRegistry, create_remote_registry
+
+
+@pytest.fixture(autouse=True)
+def _disable_rate_limiter():
+    """Disable the slowapi limiter for the whole suite.
+
+    The limiter keys by remote address with a shared in-memory store, so every
+    TestClient request to a given endpoint shares one per-minute bucket across the
+    session — making the suite fragile to how many tests hit a rate-limited route
+    (e.g. /advisor/shipping). No test asserts slowapi's 429 behavior, so we turn it
+    off here (mirrors the per-test `limiter.enabled = False` already used elsewhere).
+    """
+    was = getattr(limiter, "enabled", True)
+    limiter.enabled = False
+    yield
+    limiter.enabled = was
 
 _ZIP_PATTERN = re.compile(r"^\d{5}(-\d{4})?$")
 

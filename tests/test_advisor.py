@@ -113,6 +113,48 @@ def test_shipping_advisor_with_quote_context():
     assert data["answer"]
 
 
+def _tags(data: dict) -> list:
+    return (data.get("decision_path") or {}).get("tags", [])
+
+
+def test_shipping_advisor_reply_to_tags_decision_path():
+    response = client.post("/api/v1/advisor/shipping", json={
+        "query": "Why not the cheaper one, and what's the fastest within it?",
+        "context": {"origin_zip": "90210", "destination_zip": "10001", "weight_lbs": 5.0},
+        "reply_to": {
+            "role": "assistant",
+            "text": "FedEx Express is fastest, while LuggageToShip Economy is cheapest.",
+        },
+        "recent_history": [
+            {"role": "user", "text": "show me the options"},
+            {"role": "assistant", "text": "FedEx fastest; LuggageToShip Economy cheapest."},
+        ],
+    })
+    assert response.status_code == 200, response.text
+    assert "advisor:reply_to" in _tags(response.json())
+
+
+def test_shipping_advisor_bounds_oversized_reply_context():
+    # Within the schema cap but still large: reply_context truncates the reply + caps the
+    # history to the last few turns so the prompt can't be bloated. Must not error.
+    response = client.post("/api/v1/advisor/shipping", json={
+        "query": "and the fastest within it?",
+        "context": {"origin_zip": "90210", "destination_zip": "10001", "weight_lbs": 5.0},
+        "reply_to": {"role": "assistant", "text": "x" * 3000},
+        "recent_history": [{"role": "user", "text": "y" * 1500} for _ in range(50)],
+    })
+    assert response.status_code == 200, response.text
+    assert "advisor:reply_to" in _tags(response.json())
+
+
+def test_shipping_advisor_without_reply_to_has_no_tag():
+    response = client.post(
+        "/api/v1/advisor/shipping", json={"query": "what carriers are available?"},
+    )
+    assert response.status_code == 200
+    assert "advisor:reply_to" not in _tags(response.json())
+
+
 def test_shipping_advisor_empty_query():
     response = client.post("/api/v1/advisor/shipping", json={
         "query": "",
