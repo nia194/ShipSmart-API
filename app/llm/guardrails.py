@@ -154,12 +154,30 @@ def _fence_chunk(ctx) -> str:
     return f'<retrieved_chunk source="{source}" score="{score:.4f}">\n{body}\n</retrieved_chunk>'
 
 
+# Grounding rules for the OPTIONAL conversation-reference block (reply-to-a-message).
+# The reference is for resolving what the question refers to — never authoritative.
+_REPLY_CONTEXT_RULES = (
+    "CONVERSATION REFERENCE (lower priority than everything above):\n"
+    "- The user may be replying to an earlier message; the <conversation_reference> block "
+    "shows that message and a few recent turns.\n"
+    "- Use it ONLY to interpret what the current question refers to (e.g. resolving "
+    '"the cheaper one" or "that option").\n'
+    "- The current shipment details, available options, retrieved knowledge, and tool "
+    "results are AUTHORITATIVE. If the reference conflicts with them (e.g. names an option "
+    "or price that is no longer present), rely on the current data and briefly note the "
+    "change — do not treat stale chat text as fact.\n"
+    "- If the question is outside this shipment and its options, redirect the user back to "
+    "the current shipment instead of answering off-topic."
+)
+
+
 def assemble(
     *,
     system_prompt: str,
     user_text: str,
     contexts: list | None = None,
     tool_results: str = "",
+    reference_block: str = "",
     guardrails_enabled: bool | None = None,
     block_on_injection: bool | None = None,
     max_context_tokens: int | None = None,
@@ -209,9 +227,18 @@ def assemble(
             decisions.append("guardrail:sanitized_chunk")
         safe_contexts.append(ctx)
 
-    # Context-budget the chunks (drop lowest-scoring first; may raise ContextLengthError).
+    # OPTIONAL conversation-reference (reply-to). Already fence-stripped + bounded by
+    # app.llm.reply_context; we add the grounding rules + flag (don't trust) any injection.
     system_full = f"{system_prompt}\n\n{_GROUNDING_RULES}\n\n{_GUARDRAIL_RULES}"
-    fixed_text = system_full + "\n\n" + user_clean + "\n\n" + tool_results
+    if reference_block:
+        system_full += f"\n\n{_REPLY_CONTEXT_RULES}"
+        if ge and detect_injection(reference_block):
+            decisions.append("guardrail:sanitized_reference")
+
+    # Context-budget the chunks (drop lowest-scoring first; may raise ContextLengthError).
+    fixed_text = (
+        system_full + "\n\n" + user_clean + "\n\n" + tool_results + "\n\n" + reference_block
+    )
     report = fit_to_budget(
         fixed_text, safe_contexts, max_context_tokens=max_ctx, max_output_tokens=max_out,
     )
@@ -224,6 +251,8 @@ def assemble(
         parts.append(_fence_chunk(ctx))
     if tool_results:
         parts.append(f"<tool_results>\n{_neutralize_fences(tool_results)}\n</tool_results>")
+    if reference_block:
+        parts.append(reference_block)  # self-fenced + pre-sanitized by reply_context
     if not report.kept and not tool_results:
         parts.append(
             "No context was retrieved from the knowledge base. If you cannot "
