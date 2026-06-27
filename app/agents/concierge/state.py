@@ -84,3 +84,36 @@ def missing_required(slots: Slots, intent: str | None) -> list[str]:
 
 def clarification_for(slot: str) -> str:
     return CLARIFICATIONS.get(slot, f"Could you tell me the {slot.replace('_', ' ')}?")
+
+
+# Intent precedence for compound messages ("quote me, and is lithium ok?"). Mirrors
+# the deterministic extractor's regex order so single-intent behavior is unchanged.
+_INTENT_PRIORITY = ("compliance", "tracking", "quote", "advice")
+
+
+def choose_intent(intents: list[str], fallback: str | None) -> str:
+    """Pick one primary intent from a (possibly compound) set.
+
+    Highest-precedence detected intent wins; with none detected we keep the
+    conversation's prior intent, defaulting to ``advice`` (today's behavior).
+    """
+    for pref in _INTENT_PRIORITY:
+        if pref in intents:
+            return pref
+    return intents[0] if intents else (fallback or "advice")
+
+
+def apply_corrections(state: ConversationState, corrections: Slots) -> ConversationState:
+    """Force-overwrite explicitly corrected slots (a user override beats fold rules).
+
+    Distinct from :func:`fold_turn` (which is gap-fill / newest-wins for *new*
+    mentions): a correction is the user changing a value they already gave, so it
+    overwrites unconditionally. Empty corrections are ignored.
+    """
+    if not corrections:
+        return state
+    slots = dict(state.slots)
+    for key, value in corrections.items():
+        if not is_empty(value):
+            slots[key] = value
+    return state.with_(slots=slots)

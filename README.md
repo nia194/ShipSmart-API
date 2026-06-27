@@ -402,7 +402,7 @@ re-issuing credentials.
 | **Compliance review (UC2)** | `POST /api/v1/compliance/check` | Deterministic structural + grounded-area analysis with an optional model-in-the-loop critic. Returns an **advisory** verdict + findings + decision trail. Uncovered ⇒ `unverified`, never a fabricated flag. See [spotlight](#spotlight-compliance-review-uc2). |
 | **Multi-agent workflow (UC3)** | `POST /api/v1/workflow/process` | Sequences specialist agents (classify → landed-cost ‖ routing → compliance(+UC2) → documentation) via a hand-rolled deterministic engine; ports & adapters behind every domain. OFF by default (`WORKFLOW_ENABLED`). See [spotlight](#spotlight-the-multi-agent-workflow-uc3). |
 | **Workflow durability + HITL (UC4)** | `GET /api/v1/workflow/{id}` · `POST /api/v1/workflow/{id}/review` | Inspect a workflow and submit an officer determination (`cleared`/`blocked`) for one suspended on an unverified high-risk gap. Durable resume via in-memory or SQLite checkpointer. See [spotlight](#spotlight-durability--human-in-the-loop-uc4). |
-| **Conversational Concierge** | `POST /api/v1/concierge/chat` | Stateful slot-filling chat: gathers shipment slots, never re-asks for known ones, dispatches to compliance / the agent, and echoes the full state for the form ⇄ chat sync. OFF by default (`CONCIERGE_ENABLED`). See [spotlight](#spotlight-the-conversational-concierge-form--chat-sync). |
+| **Conversational Concierge** | `POST /api/v1/concierge/chat` · `GET /api/v1/concierge/{session_id}` | Multi-turn slot-filling assistant: gathers shipment slots, never re-asks for known ones, proactively guides, and dispatches to the agent / compliance / the **multi-agent workflow** (international + flags on). Persists each turn for **reload recall** and echoes full state for the form ⇄ chat sync. OFF by default (`CONCIERGE_ENABLED`). See [spotlight](#spotlight-the-conversational-concierge-form--chat-sync). |
 | RAG query | `POST /api/v1/rag/query` | Embed → similarity search → LLM synthesis. Honors `RAG_MODE` / `RAG_HYBRID`. |
 | RAG ingest | `POST /api/v1/rag/ingest` | Loads `data/documents/*` into the vector store. Auto-runs on first boot when pgvector is empty. |
 | Shipping advisor | `POST /api/v1/advisor/shipping` | RAG + tool calls (`validate_address`, `get_quote_preview`) + LLM reasoning. |
@@ -667,11 +667,27 @@ AGENT_MAX_RETRIEVALS=2         # cap on retrieve_rag calls per run (1 = single-s
 ```env
 CONCIERGE_ENABLED=false        # gate POST /api/v1/concierge/chat (404 when false)
 CONCIERGE_MAX_TURNS=12         # soft bound on a single conversation
+CONVERSATION_STORE=memory      # recall store: memory (keyless) | postgres (asyncpg + DATABASE_URL)
+CONVERSATION_MAX_MESSAGES=50   # recall window: max transcript turns loaded
 ```
 
-Stateful slot-filling chat, distinct from the Agent above. Like compliance it needs only
-the LLM router + RAG (the compliance dispatch); quote/tracking/advice reuse the agent when
-the MCP tools are wired. Keyless-friendly; off by default.
+Stateful, multi-turn slot-filling chat, distinct from the Agent above. **Deterministic-first**
+(regex + the pure `fold_turn` reducer keep it keyless-testable); an optional reasoning model
+**enriches NLU** — compound intent, explicit corrections ("actually 15 lb"), and disambiguation —
+and **rephrases** the proactive replies. The model proposes; code still merges, checks required
+slots, and decides dispatch.
+
+**Server-side recall:** each turn is persisted by an anonymous `session_id` (minted by the
+server) behind a swappable port (`app/conversations/store.py`, mirroring the audit/checkpointer
+seams). `GET /api/v1/concierge/{session_id}` replays the transcript + merged state so a chat
+survives a page reload. In-memory by default (keyless); `CONVERSATION_STORE=postgres` is the
+durable backend.
+
+**Drives the full process when toggled on:** quote/tracking/advice reuse the agent (MCP tools);
+compliance uses UC2; and an **international** shipment (worldwide scope) with
+`COMPLIANCE_EXPLICIT_ENABLED` + `WORKFLOW_ENABLED` bridges into the existing multi-agent workflow
+(classify → landed-cost ‖ routing → compliance → docs, with the human-review interrupt). The
+default deployment (domestic / flags off) behaves exactly as before. Off by default.
 
 ### Compliance (UC2)
 
