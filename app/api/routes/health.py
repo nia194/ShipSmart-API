@@ -25,6 +25,9 @@ class ReadyResponse(BaseModel):
     agent_enabled: bool = True
     compliance_enabled: bool = True
     concierge_enabled: bool = False
+    # Effective concierge recall backend: "memory" | "postgres" | "disabled"
+    # (disabled = the configured store failed to wire, so recall is off).
+    conversation_store: str = "memory"
     workflow_enabled: bool = False
     workflow_durable: bool = False
     # Resolved LLM failover chain per task (provider names), e.g.
@@ -49,6 +52,11 @@ async def ready(request: Request) -> ReadyResponse:
     reports the resolved LLM failover chain (A) + active retrieval/guardrail
     flags so operators can confirm what's wired without reading logs."""
     llm_router = getattr(request.app.state, "llm_router", None)
+    conversation_store = (
+        getattr(settings, "conversation_store", "memory")
+        if getattr(request.app.state, "conversation_store", None) is not None
+        else "disabled"
+    )
     return ReadyResponse(
         status="ready",
         rag_mode=getattr(settings, "rag_mode", "normal"),
@@ -57,6 +65,7 @@ async def ready(request: Request) -> ReadyResponse:
         agent_enabled=getattr(settings, "agent_enabled", True),
         compliance_enabled=getattr(settings, "compliance_enabled", True),
         concierge_enabled=getattr(settings, "concierge_enabled", False),
+        conversation_store=conversation_store,
         workflow_enabled=getattr(settings, "workflow_enabled", False),
         workflow_durable=getattr(settings, "workflow_durable", False),
         llm_chains=llm_router.describe_chains() if llm_router else {},
