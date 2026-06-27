@@ -78,6 +78,8 @@ async def shipping_advisor(
         llm_client=reasoning_client,
         tool_registry=tool_registry,
         llm_router=llm_router,
+        reply_to=body.reply_to,
+        recent_history=body.recent_history,
         request_id=getattr(request.state, "request_id", ""),
     )
 

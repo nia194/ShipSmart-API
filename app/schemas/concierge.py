@@ -8,6 +8,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.schemas.chat import ReplyMessage
+
 
 class ConciergeState(BaseModel):
     """The conversation state echoed back to (and re-sent by) the client."""
@@ -26,6 +28,11 @@ class ConciergeRequest(BaseModel):
     # turn → the server mints one and echoes it back; the client persists it
     # (e.g. localStorage) and re-sends it so the chat survives a page reload.
     session_id: str | None = None
+    # WhatsApp-style "reply to a message": the replied-to message + a few recent turns,
+    # used only to resolve references in `message`. Bounded server-side; never authoritative
+    # over the live shipment slots / worker results.
+    reply_to: ReplyMessage | None = None
+    recent_history: list[ReplyMessage] | None = None
 
 
 class ConciergeResponse(BaseModel):

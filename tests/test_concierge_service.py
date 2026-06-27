@@ -90,3 +90,24 @@ async def test_merges_and_echoes_full_state():
     assert res.state.slots["origin"] == "Atlanta, GA"   # equivalent restatement kept
     assert res.state.slots["destination"]
     assert res.state.slots["weight_lbs"] == 10.0
+
+
+async def test_reply_to_tags_decision_path():
+    # A reply with a referenced message tags the trail; bounded reference is built even
+    # keyless (the tag is set from the reference, independent of the LLM NLU path).
+    state = ConversationState(
+        slots={"origin": "Atlanta", "destination": "Seattle", "weight_lbs": 10.0},
+        intent="quote",
+    )
+    res = await run_concierge(
+        "why not the cheaper one?", state,
+        reply_to={"role": "assistant", "text": "FedEx fastest, LuggageToShip cheapest"},
+        recent_history=[{"role": "user", "text": "show options"}],
+        **_deps(),
+    )
+    assert "concierge:reply_to" in res.decisions
+
+
+async def test_no_reply_to_has_no_tag():
+    res = await run_concierge("ship from Atlanta to Seattle weighing 10 lb", None, **_deps())
+    assert "concierge:reply_to" not in res.decisions

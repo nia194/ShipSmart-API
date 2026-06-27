@@ -93,6 +93,8 @@ async def concierge_chat(body: ConciergeRequest, request: Request) -> ConciergeR
         audit_sink=getattr(request.app.state, "audit_sink", None),
         tool_registry=getattr(request.app.state, "tool_registry", None),
         workflow=_workflow(request, rag, llm_router),
+        reply_to=body.reply_to,
+        recent_history=body.recent_history,
         request_id=getattr(request.state, "request_id", ""),
     )
 
