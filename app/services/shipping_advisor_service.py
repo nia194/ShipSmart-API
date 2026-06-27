@@ -21,6 +21,7 @@ from app.integrations.mcp_client import RemoteToolRegistry as ToolRegistry
 from app.llm.client import LLMClient
 from app.llm.guardrails import SAFE_REFUSAL, assemble
 from app.llm.prompts import ADVISOR_SYSTEM_PROMPT
+from app.llm.reply_context import render_reference_block
 from app.llm.router import TASK_REASONING, LLMRouter
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.retrieval import retrieve
@@ -51,6 +52,8 @@ async def get_shipping_advice(
     tool_registry: ToolRegistry | None = None,
     llm_router: LLMRouter | None = None,
     task: str = TASK_REASONING,
+    reply_to: object | None = None,
+    recent_history: list | None = None,
     request_id: str = "",
 ) -> ShippingAdvice:
     """Generate shipping advice by combining RAG, tools, and LLM.
@@ -121,18 +124,24 @@ async def get_shipping_advice(
             except Exception as exc:
                 logger.warning("Tool execution failed: %s", exc)
 
-    # Step 3: Assemble a fenced/grounded/guardrailed prompt (C/D)
+    # Step 3: Assemble a fenced/grounded/guardrailed prompt (C/D). The optional reply-to
+    # reference is bounded + fence-stripped here; the live tool results above stay
+    # authoritative (see _REPLY_CONTEXT_RULES in guardrails).
     tool_text = "\n\n".join(tool_results) if tool_results else ""
+    reference_block = render_reference_block(reply_to, recent_history)
     assembled = assemble(
         system_prompt=ADVISOR_SYSTEM_PROMPT,
         user_text=query,
         contexts=rag_sources,
         tool_results=tool_text,
+        reference_block=reference_block,
         request_id=request_id,
     )
     tags = list(assembled.decisions)
     if tools_used:
         tags.append("tools:rule")  # tool triggering is deterministic (rule-based)
+    if reference_block:
+        tags.append("advisor:reply_to")
 
     sources = [
         {"source": s.source, "chunk_index": s.chunk_index, "score": round(s.score, 3)}
