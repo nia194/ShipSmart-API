@@ -33,8 +33,8 @@ from app.schemas.workflow import (
     WorkflowReviewRequest,
 )
 from app.workflow.checkpointer import WorkflowCheckpointer, create_checkpointer
-from app.workflow.engine import StateMachineEngine
-from app.workflow.orchestrator import DurableWorkflow, WorkflowDeps
+from app.workflow.factory import build_workflow
+from app.workflow.orchestrator import DurableWorkflow
 from app.workflow.review_queue import InMemoryReviewQueue, ReviewQueue
 from app.workflow.state import WorkflowState
 
@@ -75,20 +75,14 @@ def _build_workflow(request: Request) -> DurableWorkflow:
     providers: DomainProviders = (
         getattr(request.app.state, "domain", None) or default_providers()
     )
-    return DurableWorkflow(
-        engine=StateMachineEngine(),
-        deps=WorkflowDeps(
-            providers=providers,
-            llm_router=llm_router,
-            embedding_provider=rag["embedding_provider"],
-            vector_store=rag["vector_store"],
-            audit_sink=getattr(request.app.state, "audit_sink", None),
-            compliance_critique_max_rounds=settings.compliance_critique_max_rounds,
-            compliance_explicit_enabled=settings.compliance_explicit_enabled,
-            checkpointer=_checkpointer(request),
-            review_queue=_review_queue(request),
-            high_risk_areas=settings.workflow_high_risk_areas_set,
-        ),
+    return build_workflow(
+        llm_router=llm_router,
+        embedding_provider=rag["embedding_provider"],
+        vector_store=rag["vector_store"],
+        audit_sink=getattr(request.app.state, "audit_sink", None),
+        providers=providers,
+        checkpointer=_checkpointer(request),
+        review_queue=_review_queue(request),
     )
 
 
