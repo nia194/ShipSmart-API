@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.agents.concierge.models import SLOT_KEYS, Slots
 from app.llm.guardrails import assemble
 from app.llm.router import TASK_REASONING, LLMRouter
+
+_KNOWN_INTENTS = ("quote", "compliance", "tracking", "advice")
 
 # ── tiny, US-centric country recognition ────────────────────────────────────
 _COUNTRIES = {
@@ -205,3 +208,92 @@ async def _llm_extract(
     if not isinstance(data, dict):
         return {}
     return {k: v for k, v in data.items() if k in SLOT_KEYS and v not in (None, "")}
+
+
+# ── Richer NLU (compound intent · corrections · disambiguation) ──────────────
+# The deterministic extractor stays the keyless FLOOR; an optional reasoning model
+# ENRICHES it with things regex can't see: more than one intent in one message,
+# an explicit correction of an already-known value, and a flag that a value is
+# ambiguous. All model output is advisory — code still merges + decides. Keyless
+# or on any error this degrades to exactly the deterministic result.
+@dataclass(frozen=True)
+class NluResult:
+    """Structured understanding of one user message."""
+
+    intent: str | None                          # primary intent (back-compat)
+    intents: list[str] = field(default_factory=list)      # all detected (compound)
+    slots: Slots = field(default_factory=dict)            # entities to merge (gap-fill)
+    corrections: Slots = field(default_factory=dict)      # explicit overrides this turn
+    ambiguities: list[str] = field(default_factory=list)  # slots the user was vague about
+
+
+async def extract_nlu(
+    message: str,
+    prior_slots: Slots | None = None,
+    llm_router: LLMRouter | None = None,
+    *,
+    request_id: str = "",
+) -> NluResult:
+    """Deterministic extraction enriched by an optional structured LLM pass."""
+    det_intent, det_slots = extract_deterministic(message)
+    llm = await _llm_nlu(message, prior_slots or {}, llm_router, request_id=request_id)
+
+    slots = dict(det_slots)
+    for key, value in (llm.get("slots") or {}).items():
+        if key in SLOT_KEYS and value not in (None, ""):
+            slots.setdefault(key, value)  # deterministic wins; model fills gaps
+
+    intents: list[str] = []
+    for cand in [det_intent, *(llm.get("intents") or [])]:
+        if cand in _KNOWN_INTENTS and cand not in intents:
+            intents.append(cand)
+
+    corrections = {
+        k: v for k, v in (llm.get("corrections") or {}).items()
+        if k in SLOT_KEYS and v not in (None, "")
+    }
+    ambiguities = [a for a in (llm.get("ambiguities") or []) if a in SLOT_KEYS]
+    return NluResult(
+        intent=intents[0] if intents else None,
+        intents=intents,
+        slots=slots,
+        corrections=corrections,
+        ambiguities=ambiguities,
+    )
+
+
+async def _llm_nlu(
+    message: str, prior_slots: Slots, llm_router: LLMRouter | None, *, request_id: str = "",
+) -> dict:
+    """Best-effort structured NLU. {} for keyless/echo or on any error."""
+    if llm_router is None:
+        return {}
+    try:
+        client = llm_router.for_task(TASK_REASONING)
+    except Exception:
+        return {}
+    if getattr(client, "provider_name", "") in ("", "echo", "scripted"):
+        return {}
+    known = ", ".join(f"{k}={v}" for k, v in prior_slots.items() if v not in (None, "")) or "none"
+    system = (
+        "You are the NLU for a shipping assistant. Read the user's latest message in the "
+        "context of what is already known, and return STRICT JSON with keys: "
+        '"intents" (subset of ' + "/".join(_KNOWN_INTENTS) + ", in order of relevance), "
+        '"slots" (new shipping entities mentioned), "corrections" (entities the user is '
+        "explicitly CHANGING from a previously-known value), and \"ambiguities\" (slot names "
+        "the user referenced too vaguely to resolve). Use only these slot keys: "
+        + ", ".join(SLOT_KEYS) + ". yyyy-mm-dd for dates, numbers for weight/dims/value, "
+        "ISO-3166 alpha-2 for countries. Output JSON only, no prose.\n"
+        f"Already known: {known}"
+    )
+    assembled = assemble(
+        system_prompt=system, user_text=message, contexts=[], request_id=request_id,
+    )
+    if assembled.blocked:
+        return {}
+    try:
+        text = (await client.complete(assembled.messages) or "").strip()
+        data: Any = json.loads(text)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}

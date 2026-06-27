@@ -118,6 +118,14 @@ class Settings(BaseSettings):
     # model only helps extract entities; decisions stay deterministic. OFF by default.
     concierge_enabled: bool = False     # gate POST /api/v1/concierge/chat (404 when false)
     concierge_max_turns: int = 12       # soft bound on a single conversation
+    # Server-side conversation memory so a chat can be RECALLED after a page reload
+    # (anonymous session id). "memory" (default) = process-lifetime in-memory store —
+    # keyless, keeps today's hermetic stack working. "postgres" = durable backend via
+    # asyncpg + DATABASE_URL, writing the tables in the conversations migration. This
+    # is the Python-owned assistive-memory data plane (same access model as rag_chunks);
+    # it is never the source of truth for a booking.
+    conversation_store: str = "memory"  # "memory" | "postgres"
+    conversation_max_messages: int = 50  # recall window: max transcript turns loaded
 
     # ── Compliance (UC2) ─────────────────────────────────────────────────────
     # Deterministic compliance analysis (structural rules + grounded, coverage-
