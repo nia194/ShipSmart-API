@@ -9,12 +9,27 @@ books/quotes/verdicts; assembling a worker's typed input is pure code.
 from __future__ import annotations
 
 import logging
+import uuid
 
 from app.agents.compliance.models import Shipment
 from app.agents.compliance.service import check_compliance
-from app.agents.concierge.extract import extract
+from app.agents.concierge.extract import extract_nlu
 from app.agents.concierge.models import ConciergeResult, ConversationState, Slots
-from app.agents.concierge.state import clarification_for, fold_turn, missing_required
+from app.agents.concierge.reply import (
+    compose_gathering_reply,
+    compose_ready_summary,
+    correction_note,
+)
+from app.agents.concierge.state import (
+    REQUIRED_SLOTS,
+    apply_corrections,
+    choose_intent,
+    clarification_for,
+    fold_turn,
+    is_empty,
+    missing_required,
+)
+from app.conversations.store import ConversationRecord
 from app.core.audit import AuditSink
 from app.core.config import settings
 from app.core.scope import violates_domestic_scope
@@ -22,6 +37,8 @@ from app.llm.router import LLMRouter
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.vector_store import VectorStore
 from app.services.agent_service import run_agent
+from app.workflow.orchestrator import DurableWorkflow
+from app.workflow.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +82,29 @@ def _shipment_from_slots(slots: Slots) -> Shipment:
     )
 
 
+def reconcile_recall(
+    client_state: ConversationState, stored: ConversationRecord | None,
+) -> ConversationState:
+    """Rehydrate from the server snapshot ONLY when the client has nothing.
+
+    Active sessions keep the client-owned draft as the source of truth (today's
+    behavior): the client echoes its merged form+chat state each turn. A FRESH
+    client (no slots, turn 0) that supplies a known ``session_id`` is a page-reload
+    recall — restore the persisted snapshot so the conversation continues instead
+    of starting over.
+    """
+    if stored is None:
+        return client_state
+    if client_state.slots or client_state.turns:
+        return client_state
+    return ConversationState(
+        slots=dict(stored.slots),
+        intent=stored.intent,
+        status=stored.status,
+        turns=stored.turns,
+    )
+
+
 async def run_concierge(
     message: str,
     state: ConversationState | None = None,
@@ -74,17 +114,27 @@ async def run_concierge(
     vector_store: VectorStore,
     audit_sink: AuditSink | None = None,
     tool_registry=None,
+    workflow: DurableWorkflow | None = None,
     request_id: str = "",
 ) -> ConciergeResult:
-    """Run one concierge turn and return the reply + the full merged state."""
+    """Run one concierge turn and return the reply + the full merged state.
+
+    ``workflow`` is the assembled multi-agent workflow, passed in by the route ONLY
+    when international + compliance + workflow are all enabled. When ``None`` the
+    bridge can't fire — preserving today's domestic / flags-off behavior exactly.
+    """
     state = state or ConversationState()
     decisions: list[str] = ["concierge:plan"]
 
-    new_intent, entities = await extract(message, llm_router, request_id=request_id)
-    state = fold_turn(state, entities)
-    intent = new_intent or state.intent or "advice"
+    nlu = await extract_nlu(message, state.slots, llm_router, request_id=request_id)
+    state = fold_turn(state, nlu.slots)                 # new mentions: gap-fill / newest-wins
+    state = apply_corrections(state, nlu.corrections)   # explicit overrides win outright
+    intent = choose_intent(nlu.intents, state.intent)
     state = state.with_(intent=intent, turns=state.turns + 1)
     decisions.append(f"concierge:intent:{intent}")
+    secondary = [i for i in nlu.intents if i != intent]
+    if nlu.corrections:
+        decisions.append("concierge:correction")
 
     # Domestic-only: a user who explicitly named an international origin/destination
     # gets an honest "we ship domestically" reply rather than a silent rewrite.
@@ -106,13 +156,28 @@ async def run_concierge(
     # Domestic-only: destination country defaults to home, so never ask for it.
     if settings.is_domestic_scope:
         missing = [slot for slot in missing if slot != "destination_country"]
-    if missing:
-        slot = missing[0]
+    # A required slot the user gave but too vaguely (LLM-flagged) needs confirming.
+    # Keyless → no ambiguities, so this is a no-op on the deterministic path.
+    required = REQUIRED_SLOTS.get(intent, ())
+    ambiguous = [
+        a for a in nlu.ambiguities
+        if a in required and a not in missing and not is_empty(state.slots.get(a))
+    ]
+    if missing or ambiguous:
+        slot = missing[0] if missing else ambiguous[0]
+        tag = "clarify" if missing else "disambiguate"
         clarification = clarification_for(slot)
-        decisions.append(f"concierge:clarify:{slot}")
+        if not missing:  # disambiguation: re-confirm a vague-but-present value
+            clarification = f"Just to confirm — {clarification[0].lower()}{clarification[1:]}"
+        decisions.append(f"concierge:{tag}:{slot}")
         state = state.with_(status="gathering", pending_clarification=slot)
+        reply = await compose_gathering_reply(
+            clarification, state.slots,
+            corrections=nlu.corrections, secondary_intents=secondary,
+            llm_router=llm_router, request_id=request_id,
+        )
         return ConciergeResult(
-            reply=clarification, state=state,
+            reply=reply, state=state,
             clarification=clarification, decisions=decisions,
         )
 
@@ -120,9 +185,10 @@ async def run_concierge(
     state = state.with_(status="answered", pending_clarification=None)
     return await _dispatch(
         intent, message, state, decisions,
+        corrections=nlu.corrections,
         llm_router=llm_router, embedding_provider=embedding_provider,
         vector_store=vector_store, audit_sink=audit_sink,
-        tool_registry=tool_registry, request_id=request_id,
+        tool_registry=tool_registry, workflow=workflow, request_id=request_id,
     )
 
 
@@ -132,14 +198,24 @@ async def _dispatch(
     state: ConversationState,
     decisions: list[str],
     *,
+    corrections: Slots,
     llm_router: LLMRouter,
     embedding_provider: EmbeddingProvider,
     vector_store: VectorStore,
     audit_sink: AuditSink | None,
     tool_registry,
+    workflow: DurableWorkflow | None,
     request_id: str,
 ) -> ConciergeResult:
     decisions.append(f"concierge:dispatch:{intent}")
+    ack = correction_note(corrections)  # "Updated weight to 15 lb. " — prefixes worker output
+
+    # Drive the full multi-agent workflow for an international shipment when the
+    # route supplied one (⇒ international + compliance + workflow all enabled).
+    # This is the "compliance-workflows ON" path; it never fires domestically or
+    # with the flags off (workflow is then None).
+    if workflow is not None and _should_run_workflow(intent, state.slots):
+        return await _dispatch_workflow(workflow, state, decisions, ack, request_id)
 
     # The explicit compliance pass is an additive feature. When switched off, a
     # compliance intent falls through to the normal agent/RAG path below — still
@@ -156,7 +232,7 @@ async def _dispatch(
         )
         decisions.extend(result.decisions)
         return ConciergeResult(
-            reply=result.summary, state=state, dispatched_to="compliance",
+            reply=ack + result.summary, state=state, dispatched_to="compliance",
             sources=result.sources, decisions=decisions, provider=result.provider,
         )
 
@@ -170,21 +246,91 @@ async def _dispatch(
         )
         decisions.extend(agent.decisions)
         return ConciergeResult(
-            reply=agent.answer, state=state, dispatched_to="agent",
+            reply=ack + agent.answer, state=state, dispatched_to="agent",
             sources=agent.sources, decisions=decisions, provider=agent.provider,
         )
 
     decisions.append("concierge:dispatch:summary_fallback")
+    reply = await compose_ready_summary(
+        state.slots, intent, corrections=corrections,
+        llm_router=llm_router, request_id=request_id,
+    )
     return ConciergeResult(
-        reply=_summary_reply(state.slots), state=state,
-        dispatched_to="summary", decisions=decisions,
+        reply=reply, state=state, dispatched_to="summary", decisions=decisions,
     )
 
 
-def _summary_reply(slots: Slots) -> str:
-    have = [f"{k.replace('_', ' ')}: {v}" for k, v in slots.items() if v not in (None, "")]
-    body = "; ".join(have) if have else "your shipment details"
+def _should_run_workflow(intent: str, slots: Slots) -> bool:
+    """True for an international shipment-processing intent with a known destination.
+
+    Domestic deployments and non-shipment intents (tracking/advice) never trigger
+    the full workflow. ``workflow is not None`` (checked by the caller) already
+    guarantees compliance + workflow are enabled.
+    """
+    if settings.is_domestic_scope or intent not in ("quote", "compliance"):
+        return False
+    dest = (slots.get("destination_country") or "").strip().upper()
+    if not dest:
+        return False
+    origin = (slots.get("origin_country") or "US").strip().upper()
+    return dest != origin
+
+
+async def _dispatch_workflow(
+    workflow: DurableWorkflow,
+    state: ConversationState,
+    decisions: list[str],
+    ack: str,
+    request_id: str,
+) -> ConciergeResult:
+    """Run the multi-agent workflow over the gathered slots and narrate the result."""
+    slots = state.slots
+    ws = WorkflowState(
+        workflow_id=uuid.uuid4().hex,
+        request_id=request_id,
+        origin_country=(slots.get("origin_country") or "US"),
+        destination_country=slots["destination_country"],
+        declared_value_usd=float(slots.get("declared_value_usd") or 0.0),
+        weight_lbs=float(slots.get("weight_lbs") or 0.0),
+        description=slots.get("description") or "",
+        category=slots.get("category"),
+    )
+    result_ws = await workflow.process(ws)
+    decisions.extend(result_ws.decisions)
+    return ConciergeResult(
+        reply=ack + _workflow_summary(result_ws),
+        state=state,
+        dispatched_to="workflow",
+        decisions=decisions,
+        provider=result_ws.compliance.provider if result_ws.compliance else "",
+    )
+
+
+def _workflow_summary(ws: WorkflowState) -> str:
+    """A conversational summary of a (possibly suspended) workflow run."""
+    if ws.status == "awaiting_review":
+        areas = ", ".join(ws.pending_review_areas) or "a compliance item"
+        return (
+            f"This international shipment to {ws.destination_country} needs a quick human "
+            f"compliance review ({areas}) before it can proceed — I've queued it for an "
+            f"officer. Reference: {ws.workflow_id}."
+        )
+    parts: list[str] = []
+    if ws.recommended_carrier is not None:
+        c = ws.recommended_carrier
+        parts.append(
+            f"best option {c.carrier} {c.service} ~${c.price_usd:.0f} in {c.estimated_days}d"
+        )
+    if ws.landed_cost is not None:
+        parts.append(f"landed cost ~${ws.landed_cost.total_landed_usd:.0f}")
+    if ws.compliance is not None:
+        parts.append(f"compliance {ws.compliance.verdict.replace('_', ' ')}")
+    if ws.hs_code:
+        parts.append(f"HS {ws.hs_code}")
+    if ws.documents:
+        parts.append(f"{len(ws.documents)} document(s) drafted")
+    body = "; ".join(parts) if parts else "processed end to end"
     return (
-        f"Got it — I have {body}. The live shipping tools aren't connected right now, "
-        "so I can't pull live options, but everything you told me is captured."
+        f"Done — I ran the full process for your international shipment to "
+        f"{ws.destination_country}: {body}. (workflow {ws.workflow_id})"
     )

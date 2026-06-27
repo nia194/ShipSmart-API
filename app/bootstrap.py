@@ -21,6 +21,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 
+from app.conversations.store import create_conversation_store
 from app.core.audit import create_audit_sink
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -134,6 +135,29 @@ async def lifespan(app: FastAPI):
             settings.workflow_high_risk_areas,
         )
 
+    # Conversation memory (concierge recall) — swappable store behind a port.
+    # In-memory by default (keyless); Postgres when CONVERSATION_STORE=postgres.
+    # A connect() failure degrades gracefully to "no recall" rather than crashing.
+    app.state.conversation_store = create_conversation_store(
+        settings.conversation_store, settings.database_url,
+    )
+    if app.state.conversation_store is not None and hasattr(
+        app.state.conversation_store, "connect",
+    ):
+        try:
+            await app.state.conversation_store.connect()
+        except Exception as exc:
+            logger.error(
+                "Conversation store connect failed (%s); concierge recall disabled: %s",
+                settings.conversation_store, exc,
+            )
+            app.state.conversation_store = None
+    logger.info(
+        "Conversation store: %s",
+        type(app.state.conversation_store).__name__
+        if app.state.conversation_store else "disabled",
+    )
+
     # Remote tool registry — hydrated from the standalone ShipSmart-MCP
     # service. If SHIPSMART_MCP_URL is not configured, the advisor and
     # orchestration routes will return 503 until it is set.
@@ -168,6 +192,12 @@ async def lifespan(app: FastAPI):
             await vector_store.disconnect()  # type: ignore[attr-defined]
         except Exception as exc:
             logger.warning("Vector store disconnect failed: %s", exc)
+    conversation_store = getattr(app.state, "conversation_store", None)
+    if conversation_store is not None and hasattr(conversation_store, "disconnect"):
+        try:
+            await conversation_store.disconnect()
+        except Exception as exc:
+            logger.warning("Conversation store disconnect failed: %s", exc)
     if tool_registry is not None:
         try:
             await tool_registry.aclose()
