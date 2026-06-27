@@ -232,11 +232,19 @@ async def extract_nlu(
     prior_slots: Slots | None = None,
     llm_router: LLMRouter | None = None,
     *,
+    reference_block: str = "",
     request_id: str = "",
 ) -> NluResult:
-    """Deterministic extraction enriched by an optional structured LLM pass."""
+    """Deterministic extraction enriched by an optional structured LLM pass.
+
+    ``reference_block`` is the optional reply-to / recent-turns context (see
+    ``app.llm.reply_context``) so the model can resolve references in the message.
+    """
     det_intent, det_slots = extract_deterministic(message)
-    llm = await _llm_nlu(message, prior_slots or {}, llm_router, request_id=request_id)
+    llm = await _llm_nlu(
+        message, prior_slots or {}, llm_router,
+        reference_block=reference_block, request_id=request_id,
+    )
 
     slots = dict(det_slots)
     for key, value in (llm.get("slots") or {}).items():
@@ -263,7 +271,8 @@ async def extract_nlu(
 
 
 async def _llm_nlu(
-    message: str, prior_slots: Slots, llm_router: LLMRouter | None, *, request_id: str = "",
+    message: str, prior_slots: Slots, llm_router: LLMRouter | None,
+    *, reference_block: str = "", request_id: str = "",
 ) -> dict:
     """Best-effort structured NLU. {} for keyless/echo or on any error."""
     if llm_router is None:
@@ -287,7 +296,8 @@ async def _llm_nlu(
         f"Already known: {known}"
     )
     assembled = assemble(
-        system_prompt=system, user_text=message, contexts=[], request_id=request_id,
+        system_prompt=system, user_text=message, contexts=[],
+        reference_block=reference_block, request_id=request_id,
     )
     if assembled.blocked:
         return {}
