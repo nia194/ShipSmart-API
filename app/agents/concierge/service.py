@@ -33,6 +33,7 @@ from app.conversations.store import ConversationRecord
 from app.core.audit import AuditSink
 from app.core.config import settings
 from app.core.scope import violates_domestic_scope
+from app.llm.reply_context import render_reference_block
 from app.llm.router import LLMRouter
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.vector_store import VectorStore
@@ -115,6 +116,8 @@ async def run_concierge(
     audit_sink: AuditSink | None = None,
     tool_registry=None,
     workflow: DurableWorkflow | None = None,
+    reply_to: object | None = None,
+    recent_history: list | None = None,
     request_id: str = "",
 ) -> ConciergeResult:
     """Run one concierge turn and return the reply + the full merged state.
@@ -126,7 +129,16 @@ async def run_concierge(
     state = state or ConversationState()
     decisions: list[str] = ["concierge:plan"]
 
-    nlu = await extract_nlu(message, state.slots, llm_router, request_id=request_id)
+    # Optional reply-to / recent-turns reference (bounded), used only to resolve references
+    # in the message — the merged slots + worker results stay authoritative.
+    reference_block = render_reference_block(reply_to, recent_history)
+    if reference_block:
+        decisions.append("concierge:reply_to")
+
+    nlu = await extract_nlu(
+        message, state.slots, llm_router,
+        reference_block=reference_block, request_id=request_id,
+    )
     state = fold_turn(state, nlu.slots)                 # new mentions: gap-fill / newest-wins
     state = apply_corrections(state, nlu.corrections)   # explicit overrides win outright
     intent = choose_intent(nlu.intents, state.intent)

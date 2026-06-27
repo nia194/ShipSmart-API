@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.schemas.chat import ReplyMessage
+
 
 class DecisionPath(BaseModel):
     """How a response was produced (E). Additive + optional — existing clients
@@ -31,6 +33,11 @@ class ShippingAdvisorRequest(BaseModel):
         default_factory=dict,
         description="Optional context: origin_zip, destination_zip, weight_lbs, dimensions, etc.",
     )
+    # WhatsApp-style "reply to a message": the replied-to message + a few recent turns,
+    # used only to resolve references in `query`. Bounded server-side; never authoritative
+    # over the live shipment/quote/tool context. Absent ⇒ today's one-shot behavior.
+    reply_to: ReplyMessage | None = None
+    recent_history: list[ReplyMessage] | None = None
 
 
 class ShippingAdvisorResponse(BaseModel):
