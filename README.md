@@ -5,14 +5,14 @@
 [![uv](https://img.shields.io/badge/uv-0.6%2B-DE5FE9?logo=python&logoColor=white)](https://docs.astral.sh/uv/)
 [![pgvector](https://img.shields.io/badge/pgvector-Postgres-336791?logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
 [![Claude](https://img.shields.io/badge/Claude-native%20tool--calling-D97757?logo=anthropic&logoColor=white)](#spotlight-the-concierge-agent)
-[![Tests](https://img.shields.io/badge/tests-380%20passing-3FB950?logo=pytest&logoColor=white)](#tests)
+[![Tests](https://img.shields.io/badge/tests-434%20passing-3FB950?logo=pytest&logoColor=white)](#tests)
 [![Deploy: Render](https://img.shields.io/badge/Deploy-Render-46E3B7?logo=render&logoColor=white)](https://render.com/)
 [![License](https://img.shields.io/badge/License-See%20LICENSE-blue)](./LICENSE)
 
 > An async **AI-orchestration microservice** that turns a multi-provider LLM stack into a
 > grounded shipping **concierge** — a model-driven **agent loop**, **hybrid + iterative RAG**,
 > **prompt-injection guardrails**, and **per-task provider failover** — all behind a
-> hermetic **380-test** suite.
+> hermetic **434-test** suite.
 
 AI / orchestration service for the ShipSmart shipping platform. Owns no transactional
 data; provides RAG-grounded shipping advice, a tool-calling concierge agent, tracking
@@ -62,7 +62,7 @@ The parts worth a closer look — each maps to real, tested code in this repo:
 | 🛡️ | **Prompt-injection guardrails + grounding** | All prompt assembly flows through one assembler (`app/llm/guardrails.py`): role separation, untrusted-data fencing, injection detection (block or neutralize), and **grounding** — answer only from retrieved data or refuse, never guess. |
 | 🔎 | **Retrieval that scales by config** | Single-shot dense → **hybrid** (dense + BM25/Postgres-lexical fusion) → **iterative** (bounded plan→retrieve→assess loop). All behind flags; defaults reproduce the simple path. |
 | 🔭 | **Observability built in** | W3C `traceparent` + `X-Request-Id` minted/propagated across every hop (Java, MCP), structured logging, a `decision_path` trace on every answer, and a `/ready` probe that reports the live wiring. |
-| 🧪 | **Hermetic-by-construction tests** | **380 tests in ~4s**, zero network, zero real keys — an autouse fixture pins every test to a self-contained profile. Includes an agentic eval harness (`scripts/agentic_eval.py`). |
+| 🧪 | **Hermetic-by-construction tests** | **434 tests in ~4s**, zero network, zero real keys — an autouse fixture pins every test to a self-contained profile. Includes an agentic eval harness (`scripts/agentic_eval.py`). |
 | 🧩 | **Polyglot microservice design** | One of five sibling services: this Python AI service alongside a Java/Spring transactional API, a React SPA, an MCP tool server, and a Supabase/Infra repo — communicating over typed HTTP contracts. |
 
 ---
@@ -411,7 +411,7 @@ re-issuing credentials.
 | Compare | `POST /api/v1/compare` | Decision-cockpit: compares 2–3 shipping options across scenarios (on-time, damage, price, speed) using LLM reasoning. |
 | Tool orchestration | `POST /api/v1/orchestration/run` | Executes a registered tool. Auto-selects via regex first, then LLM-assisted fallback. |
 | Tool catalog | `GET /api/v1/orchestration/tools` | JSON Schemas for all registered tools. |
-| Service info | `GET /api/v1/info` | Returns service metadata (version, env, active providers). No secrets exposed. |
+| Service info | `GET /api/v1/info` | Returns service metadata (version, env, active providers, `shipping_scope`). No secrets exposed. |
 | Liveness | `GET /health` | Liveness probe. |
 | Readiness | `GET /ready` | Reports resolved `rag_mode`, `rag_hybrid`, `guardrails_enabled`, `agent_enabled`, `compliance_enabled`, `concierge_enabled`, `workflow_enabled`, `workflow_durable`, and per-task LLM failover chains — confirm the live wiring without reading logs. |
 
@@ -550,6 +550,18 @@ the env vars below to unlock real behavior.
 ## Environment variables
 
 All flags live in `.env.example` with comments. Highlights:
+
+### Shipping scope (platform policy)
+
+```env
+SHIPPING_SCOPE=worldwide       # worldwide (default, cross-border allowed) | domestic
+DOMESTIC_COUNTRY=US            # ISO-3166 alpha-2 home country when SHIPPING_SCOPE=domestic
+```
+
+`domestic` restricts the platform to deliveries within `DOMESTIC_COUNTRY` — a cross-border
+request is rejected with `422` and the concierge degrades to a domestic-only reply. The active
+mode is published on `GET /api/v1/info`, and the Web, Orchestrator, and MCP siblings read and
+enforce the same value (their `*_SHIPPING_SCOPE` / `SHIPPING_SCOPE` mirror this one).
 
 ### LLM routing
 
@@ -693,6 +705,7 @@ default deployment (domestic / flags off) behaves exactly as before. Off by defa
 
 ```env
 COMPLIANCE_ENABLED=true              # gate POST /api/v1/compliance/check (404 when false)
+COMPLIANCE_EXPLICIT_ENABLED=true     # additive: run the hard UC2 pass on the chat/workflow paths; false = normal flow only (also skips the workflow HITL interrupt)
 COMPLIANCE_CRITIQUE_MAX_ROUNDS=0     # 0 = critic off (deterministic only); >0 enables the UC2 critic
 COMPLIANCE_MAX_GAP_AREAS=3           # max gap areas accepted from the critic per round
 COMPLIANCE_VALUE_THRESHOLD_USD=2500  # declared value (USD) that flags a commercial invoice (international)
@@ -878,7 +891,7 @@ curl -X POST http://localhost:8000/api/v1/advisor/recommendation \
 ## Tests
 
 ```bash
-uv run pytest          # 380 tests, ~4s, no network / no real keys
+uv run pytest          # 434 tests, ~4s, no network / no real keys
 ```
 
 Tests live under `tests/` and use `pytest-asyncio` (async mode = auto).
