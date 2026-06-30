@@ -924,6 +924,16 @@ the advisors, and `decision_path`. Service/seam coverage worth calling out:
 | `test_middleware.py` | `X-Request-Id` / `traceparent` minting + echo and `outbound_headers()` propagation. |
 | `test_pgvector_store.py` | SQL-shape contract (cosine operator; `match_rag_chunks_lexical($1,$2)` selecting `source, chunk_index, text, score`) via a fake asyncpg pool — no DB. |
 
+### Lint & formatting
+
+```bash
+uv run ruff check .          # lint (line length, imports, pyflakes)
+```
+
+A `.pre-commit-config.yaml` wires **ruff** plus hygiene hooks (end-of-file fixer, trailing
+whitespace, YAML, merge-conflict) — install once with `uvx pre-commit install`. CI
+(`.github/workflows/ci.yml`) runs `ruff check .` then `pytest -q` on every push / PR.
+
 ---
 
 ## Cross-service contracts
