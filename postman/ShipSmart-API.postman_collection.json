@@ -1,0 +1,665 @@
+{
+  "info": {
+    "name": "ShipSmart-API",
+    "description": "FastAPI AI service contract \u2014 health/ready/info, concierge, compliance (UC2), workflow (UC3/UC4) chain, compare, RAG, orchestration, recommendation. Structural assertions (keyless-safe).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test('no server error', () => pm.expect(pm.response.code).to.be.below(500));",
+          "pm.test('responds < 15s', () => pm.expect(pm.response.responseTime).to.be.below(15000));"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8000"
+    },
+    {
+      "key": "workflow_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Health & readiness",
+      "item": [
+        {
+          "name": "GET /health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /ready",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('resolved flags + llm chains', () => { pm.expect(b).to.have.property('concierge_enabled'); pm.expect(b).to.have.property('workflow_enabled'); pm.expect(b.llm_chains).to.have.property('reasoning'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/ready",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ready"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/info",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('publishes shipping_scope', () => pm.expect(pm.response.json()).to.have.property('shipping_scope'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/info",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "info"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Concierge",
+      "item": [
+        {
+          "name": "chat \u2014 greeting",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('greeting handled (not RAG dump)', () => { pm.expect(b.decisions).to.include('concierge:greeting'); pm.expect(b.reply).to.match(/^Hi!/); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/concierge/chat",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "concierge",
+                "chat"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"hi\",\n  \"state\": null\n}"
+            }
+          }
+        },
+        {
+          "name": "chat \u2014 quote gathers/dispatches",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('quote intent, not an empty refusal', () => { pm.expect(b.state.intent).to.eql('quote'); pm.expect(b.reply).to.not.match(/don.t have enough/i); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/concierge/chat",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "concierge",
+                "chat"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"get me a quote to ship from chicago to denver, 5 lb\",\n  \"state\": null\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Compliance (UC2)",
+      "item": [
+        {
+          "name": "compliance/check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('advisory verdict + findings', () => { pm.expect(['action_required','review_recommended','advisory']).to.include(b.verdict); pm.expect(b.findings).to.be.an('array'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/compliance/check",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "compliance",
+                "check"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"origin_country\": \"US\",\n  \"destination_country\": \"BR\",\n  \"declared_value_usd\": 600,\n  \"weight_lbs\": 3,\n  \"description\": \"camera drone with lithium battery\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Workflow (UC3/UC4) chain",
+      "item": [
+        {
+          "name": "process",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('terminal or suspended state', () => pm.expect(['completed','awaiting_review','blocked']).to.include(b.status));",
+                  "pm.collectionVariables.set('workflow_id', b.workflow_id);",
+                  "pm.test('has hs_code + decisions', () => { pm.expect(b.hs_code).to.be.a('string'); pm.expect(b.decisions).to.be.an('array'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/workflow/process",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workflow",
+                "process"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"origin_country\": \"US\",\n  \"destination_country\": \"BR\",\n  \"declared_value_usd\": 600,\n  \"weight_lbs\": 3,\n  \"description\": \"camera drone with lithium battery\"\n}"
+            }
+          }
+        },
+        {
+          "name": "GET {id}",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('same id', () => pm.expect(pm.response.json().workflow_id).to.eql(pm.collectionVariables.get('workflow_id')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/workflow/{{workflow_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workflow",
+                "{{workflow_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "review cleared",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// 200 completed if it was awaiting review; 409 if already terminal (straight-through). Both valid.",
+                  "pm.test('200 or 409', () => pm.expect([200,409]).to.include(pm.response.code));",
+                  "if (pm.response.code === 200) pm.test('completed', () => pm.expect(['completed','blocked']).to.include(pm.response.json().status));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/workflow/{{workflow_id}}/review",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workflow",
+                "{{workflow_id}}",
+                "review"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"determination\": \"cleared\",\n  \"note\": \"checked import rules\"\n}"
+            }
+          }
+        },
+        {
+          "name": "GET unknown id -> 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/workflow/does-not-exist",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workflow",
+                "does-not-exist"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Compare / RAG / Orchestration / Recommendation",
+      "item": [
+        {
+          "name": "compare",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('four scenarios', () => pm.expect(Object.keys(pm.response.json().scenarios)).to.have.members(['ontime','damage','price','speed']));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/compare",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "compare"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"shipment\": {\n    \"item_description\": \"laptop\",\n    \"origin_zip\": \"60601\",\n    \"destination_zip\": \"02108\",\n    \"deadline_date\": \"2026-07-10\",\n    \"weight_lb\": 6,\n    \"declared_value_usd\": 900\n  },\n  \"option_ids\": [\n    \"ups-ground\",\n    \"fedex-2day\"\n  ],\n  \"options\": [\n    {\n      \"id\": \"ups-ground\",\n      \"carrier\": \"UPS\",\n      \"service_name\": \"UPS Ground\",\n      \"carrier_type\": \"public\",\n      \"price_usd\": 12.5,\n      \"arrival_date\": \"2026-07-09\",\n      \"arrival_label\": \"Thu, Jul 9\",\n      \"transit_days\": 5,\n      \"guaranteed\": false\n    },\n    {\n      \"id\": \"fedex-2day\",\n      \"carrier\": \"FedEx\",\n      \"service_name\": \"FedEx 2Day\",\n      \"carrier_type\": \"private\",\n      \"price_usd\": 29.0,\n      \"arrival_date\": \"2026-07-07\",\n      \"arrival_label\": \"Tue, Jul 7\",\n      \"transit_days\": 2,\n      \"guaranteed\": true\n    }\n  ],\n  \"selected_priority\": \"speed\"\n}"
+            }
+          }
+        },
+        {
+          "name": "rag/query",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('has an answer', () => pm.expect(pm.response.json()).to.have.property('answer'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/rag/query",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rag",
+                "query"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"What are DHL's international options?\"\n}"
+            }
+          }
+        },
+        {
+          "name": "orchestration/tools",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/orchestration/tools",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "orchestration",
+                "tools"
+              ]
+            }
+          }
+        },
+        {
+          "name": "orchestration/run (explicit)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('executed the explicit tool (metadata present)', () => pm.expect(pm.response.json()).to.have.property('metadata'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/orchestration/run",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "orchestration",
+                "run"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"validate\",\n  \"tool\": \"validate_address\",\n  \"params\": {\n    \"street\": \"1 Infinite Loop\",\n    \"city\": \"Cupertino\",\n    \"state\": \"CA\",\n    \"zip_code\": \"95014\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "advisor/recommendation (scoring)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/advisor/recommendation",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "advisor",
+                "recommendation"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"services\": [\n    {\n      \"service\": \"Ground\",\n      \"price_usd\": 12.5,\n      \"estimated_days\": 5\n    },\n    {\n      \"service\": \"Express\",\n      \"price_usd\": 29,\n      \"estimated_days\": 1\n    }\n  ],\n  \"context\": {\n    \"urgent\": true\n  }\n}"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
