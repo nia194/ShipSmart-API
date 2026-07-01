@@ -83,6 +83,22 @@ async def test_compose_ready_summary_suggests_next_action():
     assert "Atlanta" in reply and "options" in reply
 
 
+async def test_polish_keeps_clarifying_question():
+    # A degenerate rephrase that drops the question must fall back to the template,
+    # so the user always gets an actual question (not an apology).
+    class DropsQuestion:
+        provider_name = "openai"
+
+        async def complete(self, messages, **kw):
+            return "I'm sorry, I don't have enough information."
+
+    router = LLMRouter(clients={TASK_SYNTHESIS: DropsQuestion()}, fallback=EchoClient())
+    out = await compose_gathering_reply(
+        "Where are you shipping from?", {}, llm_router=router,
+    )
+    assert out.endswith("Where are you shipping from?")
+
+
 # ── service integration (monkeypatched NLU for model-only signals) ────────────
 async def test_correction_overwrites_and_is_acknowledged(monkeypatch):
     import app.agents.concierge.service as svc
@@ -133,3 +149,29 @@ async def test_compound_intent_prefers_compliance(monkeypatch):
     res = await run_concierge("quote me, and is it allowed?", state, **_deps())
     assert res.state.intent == "compliance"
     assert res.dispatched_to == "compliance"
+
+
+# ── lowercase routes + city→country resolution (regression) ───────────────────
+async def test_lowercase_city_route_parses_and_resolves_country():
+    # Real users type lowercase; the route + its countries must still resolve.
+    nlu = await extract_nlu("atlanta to seattle, 12 lb", {}, None)
+    assert nlu.slots["origin"] == "atlanta"
+    assert nlu.slots["destination"] == "seattle"
+    assert nlu.slots["origin_country"] == "US"
+    assert nlu.slots["destination_country"] == "US"
+    assert nlu.slots["weight_lbs"] == 12.0
+
+
+async def test_city_route_resolves_country_to_enable_workflow():
+    # Without city→country, the international multi-agent workflow can never fire from chat.
+    nlu = await extract_nlu("ship a drone from New York to Berlin", {}, None)
+    assert nlu.slots["origin_country"] == "US"
+    assert nlu.slots["destination_country"] == "DE"
+
+
+async def test_non_place_route_not_overparsed():
+    # "my shipment to brazil" must NOT be read as a route origin "my shipment";
+    # the standalone-country rule still sets the destination country.
+    nlu = await extract_nlu("my shipment to brazil", {}, None)
+    assert "origin" not in nlu.slots
+    assert nlu.slots.get("destination_country") == "BR"

@@ -9,11 +9,12 @@ books/quotes/verdicts; assembling a worker's typed input is pure code.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 
 from app.agents.compliance.models import Shipment
 from app.agents.compliance.service import check_compliance
-from app.agents.concierge.extract import extract_nlu
+from app.agents.concierge.extract import extract_nlu, is_greeting
 from app.agents.concierge.models import ConciergeResult, ConversationState, Slots
 from app.agents.concierge.reply import (
     compose_gathering_reply,
@@ -33,8 +34,9 @@ from app.conversations.store import ConversationRecord
 from app.core.audit import AuditSink
 from app.core.config import settings
 from app.core.scope import violates_domestic_scope
+from app.llm.errors import LLMError
 from app.llm.reply_context import render_reference_block
-from app.llm.router import LLMRouter
+from app.llm.router import TASK_REASONING, LLMRouter
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.vector_store import VectorStore
 from app.services.agent_service import run_agent
@@ -57,12 +59,76 @@ _ADVISOR_CONTEXT_KEYS = {
 }
 
 
+def _is_keyless(llm_router: LLMRouter) -> bool:
+    """True when no real LLM is wired (echo/scripted/unset).
+
+    Keyless, the read-only agent can only return generic boilerplate, so the
+    deterministic ready-summary is strictly more useful for the user.
+    """
+    try:
+        client = llm_router.for_task(TASK_REASONING)
+    except Exception:
+        return True
+    return getattr(client, "provider_name", "") in ("", "echo", "scripted")
+
+
+# get_quote_preview requires US ZIPs + package dimensions, but the concierge gathers
+# free-text places and (per its required slots) no dimensions. Resolve common cities to
+# a representative ZIP and assume a standard box when none is given, so an origin/
+# destination/weight conversation can actually produce a quote (the README's "add
+# dimensions for a sharper rate"). Unknown cities pass through unchanged.
+_CITY_ZIP: dict[str, str] = {
+    "new york": "10001", "nyc": "10001", "los angeles": "90001", "la": "90001",
+    "chicago": "60601", "houston": "77001", "phoenix": "85001", "philadelphia": "19101",
+    "san antonio": "78201", "san diego": "92101", "dallas": "75201", "austin": "73301",
+    "san francisco": "94102", "sf": "94102", "seattle": "98101", "denver": "80202",
+    "boston": "02108", "miami": "33101", "atlanta": "30301", "reno": "89501",
+    "portland": "97201", "las vegas": "89101", "detroit": "48201", "minneapolis": "55401",
+    "nashville": "37201", "washington": "20001", "dc": "20001",
+}
+_DEFAULT_DIMS_IN = {"length_in": 12.0, "width_in": 9.0, "height_in": 6.0}
+
+
+def _to_zip(value: str) -> str:
+    """Best-effort place→ZIP: a ZIP-shaped value passes through; a known city maps to
+    a representative ZIP; anything else is returned unchanged."""
+    v = value.strip()
+    m = re.match(r"^(\d{5})", v)
+    if m:
+        return m.group(1)
+    key = re.sub(r",\s*[a-z]{2}$", "", v.lower())
+    return _CITY_ZIP.get(key, value)
+
+
+def _agent_query_for(intent: str, message: str, slots: Slots) -> str:
+    """Shape an explicit query for the read-only agent from the conversation intent.
+
+    The raw last turn is often terse ("about 5 lbs") and a poor agent prompt; an
+    intent-shaped question makes the agent act on the gathered slots.
+    """
+    if intent == "quote":
+        return "What are my best shipping options and the price for this shipment?"
+    if intent == "tracking":
+        ref = slots.get("tracking_reference")
+        if ref:
+            return f"What is the latest status of tracking number {ref}?"
+    return message
+
+
 def _advisor_context(slots: Slots) -> dict:
-    return {
+    ctx = {
         key: slots[slot]
         for slot, key in _ADVISOR_CONTEXT_KEYS.items()
         if slots.get(slot) not in (None, "")
     }
+    for zip_key in ("origin_zip", "destination_zip"):
+        if zip_key in ctx:
+            ctx[zip_key] = _to_zip(str(ctx[zip_key]))
+    # A quote needs dimensions; assume a standard box when the user gave none.
+    if "weight_lbs" in ctx:
+        for dim_key, default in _DEFAULT_DIMS_IN.items():
+            ctx.setdefault(dim_key, default)
+    return ctx
 
 
 def _shipment_from_slots(slots: Slots) -> Shipment:
@@ -139,6 +205,22 @@ async def run_concierge(
         message, state.slots, llm_router,
         reference_block=reference_block, request_id=request_id,
     )
+
+    # Pure greeting / smalltalk with nothing extracted and no prior context: welcome
+    # and orient the user, instead of dispatching an empty query to the agent (which
+    # would return generic RAG boilerplate).
+    if is_greeting(message) and not nlu.slots and not nlu.intents and not state.slots:
+        decisions.append("concierge:greeting")
+        reply = (
+            "Hi! I'm your shipping assistant. Tell me what you'd like to ship and where "
+            '— e.g. "from Atlanta to Seattle, 12 lb" — and I\'ll line up options, check '
+            "customs/compliance, or track a package."
+        )
+        return ConciergeResult(
+            reply=reply, state=state.with_(status="gathering", turns=state.turns + 1),
+            decisions=decisions,
+        )
+
     state = fold_turn(state, nlu.slots)                 # new mentions: gap-fill / newest-wins
     state = apply_corrections(state, nlu.corrections)   # explicit overrides win outright
     intent = choose_intent(nlu.intents, state.intent)
@@ -195,13 +277,27 @@ async def run_concierge(
 
     decisions.append("concierge:ready")
     state = state.with_(status="answered", pending_clarification=None)
-    return await _dispatch(
-        intent, message, state, decisions,
-        corrections=nlu.corrections,
-        llm_router=llm_router, embedding_provider=embedding_provider,
-        vector_store=vector_store, audit_sink=audit_sink,
-        tool_registry=tool_registry, workflow=workflow, request_id=request_id,
-    )
+    try:
+        return await _dispatch(
+            intent, message, state, decisions,
+            corrections=nlu.corrections,
+            llm_router=llm_router, embedding_provider=embedding_provider,
+            vector_store=vector_store, audit_sink=audit_sink,
+            tool_registry=tool_registry, workflow=workflow, request_id=request_id,
+        )
+    except LLMError as exc:
+        # A provider failure mid-dispatch (bad/expired key, outage, rate limit) must
+        # not 502 a user-facing chat. Degrade to the deterministic ready-summary —
+        # the same graceful fallback the keyless path and reply-polish already use.
+        logger.warning("concierge: dispatch degraded to summary (LLM error: %s)", exc)
+        decisions.append("concierge:dispatch:llm_degraded")
+        reply = await compose_ready_summary(
+            state.slots, intent, corrections=nlu.corrections,
+            llm_router=None, request_id=request_id,
+        )
+        return ConciergeResult(
+            reply=reply, state=state, dispatched_to="summary", decisions=decisions,
+        )
 
 
 async def _dispatch(
@@ -248,10 +344,15 @@ async def _dispatch(
             sources=result.sources, decisions=decisions, provider=result.provider,
         )
 
-    # quote / tracking / advice → the existing read-only agent (tools + RAG).
-    if tool_registry is not None:
+    # quote / tracking / advice → the existing read-only agent (tools + RAG) when a
+    # real LLM is wired. Keyless, the agent only returns generic boilerplate, so fall
+    # through to the deterministic ready-summary below (grounded + genuinely useful).
+    if tool_registry is not None and not _is_keyless(llm_router):
+        # A terse last turn ("about 5 lbs") is a poor agent query — give the agent an
+        # intent-shaped question so it acts on the gathered slots instead of refusing.
+        agent_query = _agent_query_for(intent, message, state.slots)
         agent = await run_agent(
-            message, _advisor_context(state.slots),
+            agent_query, _advisor_context(state.slots),
             registry=tool_registry, llm_router=llm_router,
             embedding_provider=embedding_provider, vector_store=vector_store,
             request_id=request_id,
