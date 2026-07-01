@@ -27,7 +27,38 @@ _COUNTRIES = {
     "uk": "GB", "united kingdom": "GB", "england": "GB", "france": "FR",
     "india": "IN", "china": "CN", "japan": "JP", "australia": "AU",
 }
+
+# Common world cities → ISO-3166 alpha-2. Lets a city-named route ("New York to
+# Berlin") resolve origin/destination countries — without which the international
+# multi-agent workflow bridge can never fire from chat. Lower-cased keys; values
+# upper ISO-2. Intentionally a curated shortlist (not a geocoder), extend as needed.
+_CITY_COUNTRY = {
+    "new york": "US", "nyc": "US", "los angeles": "US", "la": "US", "san francisco": "US",
+    "sf": "US", "chicago": "US", "atlanta": "US", "seattle": "US", "boston": "US",
+    "miami": "US", "dallas": "US", "houston": "US", "denver": "US", "reno": "US",
+    "berlin": "DE", "munich": "DE", "frankfurt": "DE", "hamburg": "DE", "cologne": "DE",
+    "london": "GB", "manchester": "GB", "birmingham": "GB",
+    "paris": "FR", "lyon": "FR", "marseille": "FR", "nice": "FR",
+    "toronto": "CA", "vancouver": "CA", "montreal": "CA", "ottawa": "CA",
+    "tokyo": "JP", "osaka": "JP", "kyoto": "JP",
+    "sydney": "AU", "melbourne": "AU", "brisbane": "AU",
+    "mumbai": "IN", "delhi": "IN", "new delhi": "IN", "bangalore": "IN", "bengaluru": "IN",
+    "shanghai": "CN", "beijing": "CN", "shenzhen": "CN",
+    "mexico city": "MX", "guadalajara": "MX",
+    "sao paulo": "BR", "são paulo": "BR", "rio de janeiro": "BR", "rio": "BR",
+}
 _US_STATE = re.compile(r",\s*[A-Za-z]{2}\b")
+_GREETING = re.compile(
+    r"^\s*(hi|hello|hey|heya|hiya|yo|sup|howdy|greetings|"
+    r"good\s+(?:morning|afternoon|evening|day)|"
+    r"thanks?|thank\s+you|thx|ty|ok(?:ay)?|cool|great|nice)\b[\s.!,]*$",
+    re.I,
+)
+
+
+def is_greeting(message: str) -> bool:
+    """True for a pure greeting / smalltalk message (no shipping content)."""
+    return bool(_GREETING.match(message or ""))
 _VERB_HEAD = re.compile(
     r"^(ship|shipping|send|sending|mail|mailing|move|moving|want|need|deliver)\b", re.I,
 )
@@ -68,7 +99,9 @@ _INTENT = [
     (re.compile(r"\b(track|where\s+is|status\s+of|delivered\s+yet|delayed)\b", re.I), "tracking"),
     (
         re.compile(
-            r"\b(cheap|fast|option|quote|cost|how\s+much|price|rate|compare|ship)\b", re.I,
+            r"\b(cheap|fast|option|quote|cost|how\s+much|price|rate|compare|ship|"
+            r"send|mail|deliver|post)\b",
+            re.I,
         ),
         "quote",
     ),
@@ -77,8 +110,11 @@ _INTENT = [
 
 def _country(text: str) -> str | None:
     t = " ".join(text.strip().lower().split())
+    t = re.sub(r",\s*[a-z]{2}$", "", t)  # drop a ", ST" suffix before lookup
     if t in _COUNTRIES:
         return _COUNTRIES[t]
+    if t in _CITY_COUNTRY:
+        return _CITY_COUNTRY[t]
     if _US_STATE.search(text):
         return "US"
     return None
@@ -86,12 +122,13 @@ def _country(text: str) -> str | None:
 
 def _looks_like_place(token: str) -> bool:
     """A route endpoint is trusted only when it reads like a place — a known
-    country, a "City, ST", or Title-cased word(s) — so "my shipment to Brazil"
-    doesn't get parsed as a route."""
+    country/city, a "City, ST", or Title-cased word(s) — so "my shipment to Brazil"
+    doesn't get parsed as a route, while a lowercase "atlanta to seattle" does."""
     t = " ".join(token.strip().split())
     if not t:
         return False
-    if t.lower() in _COUNTRIES:
+    low = re.sub(r",\s*[a-z]{2}$", "", t.lower())
+    if low in _COUNTRIES or low in _CITY_COUNTRY:
         return True
     if _US_STATE.search(t):
         return True

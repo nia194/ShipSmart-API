@@ -233,3 +233,34 @@ def test_gemini_message_conversion_no_system():
     assert len(contents) == 1
     assert contents[0]["role"] == "user"
     assert contents[0]["parts"][0]["text"] == "Hello"
+
+
+async def test_gemini_api_key_is_sent_as_header_not_url(monkeypatch):
+    """Security: the Gemini key must go in the x-goog-api-key header, never the URL
+    (a `?key=` query param leaks the secret into httpx/access logs and proxies)."""
+    import httpx
+
+    captured: dict = {}
+
+    class _Resp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
+
+    async def _fake_post(self, url, **kwargs):
+        captured["url"] = url
+        captured["params"] = kwargs.get("params")
+        captured["headers"] = kwargs.get("headers") or {}
+        return _Resp()
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post)
+
+    out = await GeminiClient(api_key="SECRET_KEY").complete(
+        [{"role": "user", "content": "hi"}]
+    )
+    assert out == "ok"
+    assert "SECRET_KEY" not in captured["url"]
+    assert not (captured["params"] or {})  # no key (or anything) in query params
+    assert captured["headers"].get("x-goog-api-key") == "SECRET_KEY"
