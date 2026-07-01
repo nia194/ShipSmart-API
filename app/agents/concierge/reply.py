@@ -146,4 +146,11 @@ async def _maybe_polish(
         out = (await client.complete(assembled.messages) or "").strip()
     except Exception:
         return template
-    return out or template
+    if not out:
+        return template
+    # Guard against a degenerate rephrase: a clarifying question must survive the
+    # polish. If the template asks something ("…?") but the rephrase dropped the
+    # question, keep the deterministic template rather than emit an apology.
+    if "?" in template and "?" not in out:
+        return template
+    return out
