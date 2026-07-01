@@ -100,7 +100,7 @@ class Settings(BaseSettings):
     rate_limit_agent: str = "10/minute"
     rate_limit_compliance: str = "10/minute"
     rate_limit_workflow: str = "10/minute"
-    rate_limit_concierge: str = "10/minute"
+    rate_limit_concierge: str = "60/minute"  # interactive chat: a single user easily exceeds 10/min
 
     # ── Agent (Concierge) ────────────────────────────────────────────────────
     # Model-driven, read-only tool-calling loop over the MCP tools + retrieve_rag.
