@@ -182,11 +182,15 @@ class GeminiClient(LLMClient):
 
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
+                # Send the API key as a header, NOT a `?key=` URL param — a query-string
+                # key leaks into access/httpx logs and proxies in plaintext.
                 resp = await client.post(
                     url,
                     json=payload,
-                    params={"key": self._api_key},
-                    headers={"Content-Type": "application/json"},
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": self._api_key,
+                    },
                 )
 
             if resp.status_code != 200:
