@@ -5,14 +5,14 @@
 [![uv](https://img.shields.io/badge/uv-0.6%2B-DE5FE9?logo=python&logoColor=white)](https://docs.astral.sh/uv/)
 [![pgvector](https://img.shields.io/badge/pgvector-Postgres-336791?logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
 [![Claude](https://img.shields.io/badge/Claude-native%20tool--calling-D97757?logo=anthropic&logoColor=white)](#spotlight-the-concierge-agent)
-[![Tests](https://img.shields.io/badge/tests-434%20passing-3FB950?logo=pytest&logoColor=white)](#tests)
+[![Tests](https://img.shields.io/badge/tests-445%20passing-3FB950?logo=pytest&logoColor=white)](#tests)
 [![Deploy: Render](https://img.shields.io/badge/Deploy-Render-46E3B7?logo=render&logoColor=white)](https://render.com/)
 [![License](https://img.shields.io/badge/License-See%20LICENSE-blue)](./LICENSE)
 
 > An async **AI-orchestration microservice** that turns a multi-provider LLM stack into a
 > grounded shipping **concierge** — a model-driven **agent loop**, **hybrid + iterative RAG**,
 > **prompt-injection guardrails**, and **per-task provider failover** — all behind a
-> hermetic **434-test** suite.
+> hermetic **445-test** suite.
 
 AI / orchestration service for the ShipSmart shipping platform. Owns no transactional
 data; provides RAG-grounded shipping advice, a tool-calling concierge agent, tracking
@@ -62,8 +62,8 @@ The parts worth a closer look — each maps to real, tested code in this repo:
 | 🛡️ | **Prompt-injection guardrails + grounding** | All prompt assembly flows through one assembler (`app/llm/guardrails.py`): role separation, untrusted-data fencing, injection detection (block or neutralize), and **grounding** — answer only from retrieved data or refuse, never guess. |
 | 🔎 | **Retrieval that scales by config** | Single-shot dense → **hybrid** (dense + BM25/Postgres-lexical fusion) → **iterative** (bounded plan→retrieve→assess loop). All behind flags; defaults reproduce the simple path. |
 | 🔭 | **Observability built in** | W3C `traceparent` + `X-Request-Id` minted/propagated across every hop (Java, MCP), structured logging, a `decision_path` trace on every answer, and a `/ready` probe that reports the live wiring. |
-| 🧪 | **Hermetic-by-construction tests** | **434 tests in ~4s**, zero network, zero real keys — an autouse fixture pins every test to a self-contained profile. Includes an agentic eval harness (`scripts/agentic_eval.py`). |
-| 🧩 | **Polyglot microservice design** | One of five sibling services: this Python AI service alongside a Java/Spring transactional API, a React SPA, an MCP tool server, and a Supabase/Infra repo — communicating over typed HTTP contracts. |
+| 🧪 | **Hermetic-by-construction tests** | **445 tests in ~4s**, zero network, zero real keys — an autouse fixture pins every test to a self-contained profile. Includes an agentic eval harness (`scripts/agentic_eval.py`). |
+| 🧩 | **Polyglot microservice design** | One of six sibling repos: this Python AI service alongside a Java/Spring transactional API, a React SPA, an MCP tool server, a Supabase/Infra repo, and a cross-repo integration-test harness — communicating over typed HTTP contracts. |
 
 ---
 
@@ -347,7 +347,7 @@ All three reuse the same guardrailed assembler, context budget, and synthesis fa
 
 ## The ShipSmart ecosystem
 
-This service is one of five sibling repositories. Clone them as
+This service is one of six sibling repositories. Clone them as
 siblings of this directory when working on the full system.
 
 | Repo | Role | Stack |
@@ -357,6 +357,7 @@ siblings of this directory when working on the full system.
 | **[ShipSmart-API](https://github.com/nia194/ShipSmart-API)** _(this repo)_ | Python AI/orchestration service — agent, RAG, advisors, recommendations, compliance (UC2), multi-agent workflow (UC3/UC4) | FastAPI, Python 3.13 |
 | [ShipSmart-MCP](https://github.com/nia194/ShipSmart-MCP) | MCP tool server — `validate_address`, `get_quote_preview` (provider-pluggable) | FastAPI + MCP |
 | [ShipSmart-Infra](https://github.com/nia194/ShipSmart-Infra) | Supabase migrations + edge functions, deployment configs, docs | Supabase, Render blueprints |
+| [ShipSmart-Test](https://github.com/nia194/ShipSmart-Test) | Cross-repo integration harness — contract + live e2e suites, cross-service Postman collection | Python 3.13, pytest |
 
 ```
             ┌──────────────────────────────┐
@@ -757,7 +758,7 @@ RATE_LIMIT_COMPARE=10/minute       # /compare endpoint
 RATE_LIMIT_AGENT=10/minute         # /agent/run endpoint
 RATE_LIMIT_COMPLIANCE=10/minute    # /compliance/check endpoint
 RATE_LIMIT_WORKFLOW=10/minute      # /workflow/process endpoint
-RATE_LIMIT_CONCIERGE=10/minute     # /concierge/chat endpoint
+RATE_LIMIT_CONCIERGE=60/minute     # /concierge/chat — interactive chat; one user easily exceeds 10/min
 ```
 
 Per IP, via slowapi. Returns HTTP 429 when exceeded.
@@ -886,12 +887,32 @@ curl -X POST http://localhost:8000/api/v1/advisor/recommendation \
   -d '{"services":[{"service":"Ground","price_usd":12.5,"estimated_days":5},{"service":"Express","price_usd":29,"estimated_days":1}],"context":{"urgent":true}}'
 ```
 
+### Postman collection
+
+[`postman/ShipSmart-API.postman_collection.json`](./postman/ShipSmart-API.postman_collection.json)
+walks the same surfaces with assertions on every request: health + readiness (`/ready`
+flag report), the concierge chat (a greeting is handled rather than RAG-dumped; a quote
+request gathers/dispatches), a compliance check, the full workflow chain (`process` →
+`GET {id}` → `review` → unknown-id `404`, chained through a `workflow_id` collection
+variable — the review step accepts `200` completed or `409` already-terminal, since a
+straight-through run has nothing to review), and compare / RAG / orchestration /
+recommendation. A collection-level guard fails any request that returns a 5xx or takes
+over 15s. The concierge and workflow folders assume `CONCIERGE_ENABLED=true` /
+`WORKFLOW_ENABLED=true` on the target. Import it with
+[`postman/environments/local.postman_environment.json`](./postman/environments/local.postman_environment.json)
+(`base_url` defaults to `http://127.0.0.1:8000`), or run it headless:
+
+```bash
+npx newman run postman/ShipSmart-API.postman_collection.json \
+  -e postman/environments/local.postman_environment.json
+```
+
 ---
 
 ## Tests
 
 ```bash
-uv run pytest          # 434 tests, ~4s, no network / no real keys
+uv run pytest          # 445 tests, ~4s, no network / no real keys
 ```
 
 Tests live under `tests/` and use `pytest-asyncio` (async mode = auto).
@@ -911,7 +932,7 @@ the advisors, and `decision_path`. Service/seam coverage worth calling out:
 | File | Focus |
 | --- | --- |
 | `test_agent_service.py` · `test_agent_route.py` | The agent loop end-to-end + the `/agent/run` route (404 when disabled, 503 when registry/router missing). |
-| `test_concierge_state.py` · `test_concierge_service.py` · `test_concierge_route.py` | The concierge `fold_turn` reducer + deterministic extraction, the don't-re-ask dispatch, and the `/concierge/chat` route (404 when disabled, full-state echo). |
+| `test_concierge_state.py` · `test_concierge_nlu.py` · `test_concierge_service.py` · `test_concierge_route.py` | The concierge `fold_turn` reducer + deterministic extraction (lowercase routes, city → country/ZIP resolution, greeting detection), the don't-re-ask dispatch, the LLM-error degradation to the ready-summary, and the `/concierge/chat` route (404 when disabled, full-state echo). |
 | `test_agent_reretrieval.py` | Conditional, bounded re-retrieval: weak-coverage reformulation, degenerate-query rejection, and the per-run cap. |
 | `test_agent_llm.py` | Native tool-calling vs. the keyless text fallback (`NotImplementedError` → `select_tool_with_llm`). |
 | `test_guardrails.py` | Injection detection, fencing/neutralization, grounding, and output leak scanning. |
@@ -1002,9 +1023,20 @@ shared shipment draft.
   `run_concierge`'s required-slot check sees form-provided slots and dispatches straight to
   the worker instead of emitting a `concierge:clarify:*` turn.
 - **Deterministic dispatch.** Compliance assembles a `Shipment` → the UC2 flow; quote /
-  tracking / open questions route to the read-only **agent**. The model only helps
-  *extract* entities (with a keyless regex fallback) — it never quotes, books, or decides;
+  tracking / open questions route to the read-only **agent**, with an intent-shaped query
+  built from the gathered slots (a terse last turn like "about 5 lbs" is a poor agent
+  prompt). Known city names resolve to countries + representative ZIPs and a standard box
+  is assumed when dimensions are omitted, so an origin/destination/weight conversation
+  actually completes a quote preview — and an international route can bridge into the
+  multi-agent workflow. The model only helps *extract* entities (with a keyless regex
+  fallback that also parses lowercase routes) — it never quotes, books, or decides;
   assembling a worker's typed input is pure code.
+- **Degrades, never 502s.** A pure greeting/smalltalk turn is welcomed and oriented
+  (`concierge:greeting`) instead of being dispatched as an empty RAG query; a keyless
+  deployment answers from the deterministic ready-summary rather than agent boilerplate;
+  a mid-dispatch LLM provider failure falls back to that same summary
+  (`concierge:dispatch:llm_degraded`); and the reply polish keeps the deterministic
+  template whenever a rephrase would drop a clarifying question.
 - **Off by default + keyless.** `CONCIERGE_ENABLED=false` ⇒ 404; the whole loop runs on
   the `EchoClient` + a deterministic regex extractor (no keys) for demos and CI.
 
