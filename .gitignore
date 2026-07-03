@@ -64,6 +64,3 @@ workflow_checkpoints.db-*
 .DS_Store
 Thumbs.db
 
-# ─── Claude / AI tooling (local only, never commit) ───────────────────────────
-.claude/
-
