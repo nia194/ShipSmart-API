@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # Secret used to pseudonymize identity at write time (§6.1). Dev default —
     # OVERRIDE in production; rotating/deleting it unlinks pseudonymized events.
     pseudonym_secret: str = "dev-pseudonym-secret-change-me"
+    # Secret used to HMAC-sign client-echoed conversation state (§7.2). Dev
+    # default — OVERRIDE in production.
+    state_secret: str = "dev-state-secret-change-me"
 
     # ── Shipping scope (platform policy) ─────────────────────────────────────
     # Deployment-level policy: does this deployment ship internationally or only
