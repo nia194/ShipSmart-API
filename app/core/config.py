@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     # Audit + tracing sink: "logging" (default — structured log lines) or "memory"
     # (in-process capture, mainly for tests). A persistent backend is a future adapter.
     audit_sink: str = "logging"
+    # AI-event observability sink: "logging" (default) or "memory". Durable
+    # (ai_audit_log) is a future adapter — see app/core/ai_events.py.
+    ai_event_sink: str = "logging"
+    # Secret used to pseudonymize identity at write time (§6.1). Dev default —
+    # OVERRIDE in production; rotating/deleting it unlinks pseudonymized events.
+    pseudonym_secret: str = "dev-pseudonym-secret-change-me"
 
     # ── Shipping scope (platform policy) ─────────────────────────────────────
     # Deployment-level policy: does this deployment ship internationally or only
