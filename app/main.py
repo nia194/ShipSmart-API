@@ -18,6 +18,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.api.routes import (
+    admin,
     advisor,
     agent,
     compare,
@@ -75,6 +76,7 @@ app.include_router(agent.router, prefix="/api/v1")
 app.include_router(compliance.router, prefix="/api/v1")
 app.include_router(concierge.router, prefix="/api/v1")
 app.include_router(workflow.router, prefix="/api/v1")
+app.include_router(admin.router, prefix="/api/v1")
 app.include_router(compare.router, prefix="/api")
 
 

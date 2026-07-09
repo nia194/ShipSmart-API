@@ -4,18 +4,19 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.core.errors import AppError
+from app.core.kill_switch import require_feature
 from app.llm.router import TASK_SYNTHESIS, LLMRouter
 from app.rag.ingestion import ingest_documents, load_documents
 from app.services.rag_service import rag_query
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/rag", tags=["rag"])
+router = APIRouter(prefix="/rag", tags=["rag"], dependencies=[Depends(require_feature("rag"))])
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
