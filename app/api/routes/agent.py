@@ -11,16 +11,19 @@ tools — it never persists.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
 from app.core.config import settings
 from app.core.errors import AppError
+from app.core.kill_switch import require_feature
 from app.core.rate_limit import limiter
 from app.llm.router import LLMRouter
 from app.schemas.agent import AgentRequest, AgentResponse, AgentStep
 from app.services.agent_service import run_agent
 
-router = APIRouter(prefix="/agent", tags=["agent"])
+router = APIRouter(
+    prefix="/agent", tags=["agent"], dependencies=[Depends(require_feature("agent"))]
+)
 
 
 @router.post("/run", response_model=AgentResponse)

@@ -15,11 +15,12 @@ require ``tool_registry``. That keeps the endpoint working out-of-the-box in loc
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
 from app.agents.compliance import Shipment, check_compliance
 from app.core.config import settings
 from app.core.errors import AppError
+from app.core.kill_switch import require_feature
 from app.core.rate_limit import limiter
 from app.core.scope import enforce_scope
 from app.llm.router import LLMRouter
@@ -29,7 +30,11 @@ from app.schemas.compliance import (
     ComplianceResponse,
 )
 
-router = APIRouter(prefix="/compliance", tags=["compliance"])
+router = APIRouter(
+    prefix="/compliance",
+    tags=["compliance"],
+    dependencies=[Depends(require_feature("compliance"))],
+)
 
 
 @router.post("/check", response_model=ComplianceResponse)

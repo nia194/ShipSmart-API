@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # Secret used to HMAC-sign client-echoed conversation state (§7.2). Dev
     # default — OVERRIDE in production.
     state_secret: str = "dev-state-secret-change-me"
+    # Runtime AI-controls admin token (§12 incident response). EMPTY (default)
+    # means /admin/ai-controls does not exist — fail-closed until configured.
+    admin_api_token: str = ""
 
     # ── Shipping scope (platform policy) ─────────────────────────────────────
     # Deployment-level policy: does this deployment ship internationally or only
