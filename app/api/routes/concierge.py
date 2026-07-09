@@ -17,13 +17,14 @@ from __future__ import annotations
 import logging
 import uuid
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
 from app.agents.concierge.models import ConversationState
 from app.agents.concierge.service import reconcile_recall, run_concierge
 from app.conversations.store import ConversationMessage, ConversationStore
 from app.core.config import settings
 from app.core.errors import AppError
+from app.core.kill_switch import require_feature
 from app.core.rate_limit import limiter
 from app.llm.router import LLMRouter
 from app.schemas.concierge import (
@@ -38,7 +39,11 @@ from app.workflow.orchestrator import DurableWorkflow
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/concierge", tags=["concierge"])
+router = APIRouter(
+    prefix="/concierge",
+    tags=["concierge"],
+    dependencies=[Depends(require_feature("concierge"))],
+)
 
 
 def _store(request: Request) -> ConversationStore | None:

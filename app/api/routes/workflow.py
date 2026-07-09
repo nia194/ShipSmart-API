@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
 from app.core.config import settings
 from app.core.errors import AppError
+from app.core.kill_switch import require_feature
 from app.core.rate_limit import limiter
 from app.core.scope import enforce_scope
 from app.domain.adapters import DomainProviders, default_providers
@@ -38,7 +39,11 @@ from app.workflow.orchestrator import DurableWorkflow
 from app.workflow.review_queue import InMemoryReviewQueue, ReviewQueue
 from app.workflow.state import WorkflowState
 
-router = APIRouter(prefix="/workflow", tags=["workflow"])
+router = APIRouter(
+    prefix="/workflow",
+    tags=["workflow"],
+    dependencies=[Depends(require_feature("workflow"))],
+)
 
 
 def _require_enabled() -> None:
