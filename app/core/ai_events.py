@@ -76,6 +76,7 @@ def build_ai_event(
     latency_ms: float = 0.0,
     token_count: int = 0,
     cost_estimate_usd: float = 0.0,
+    feedback_comment: str = "",
     secret: str,
 ) -> AIEvent:
     """Build a PII-safe AIEvent: pseudonymize identity, redact free text."""
@@ -94,6 +95,7 @@ def build_ai_event(
         latency_ms=latency_ms,
         token_count=token_count,
         cost_estimate_usd=cost_estimate_usd,
+        feedback_comment=redact(feedback_comment),
     )
 
 

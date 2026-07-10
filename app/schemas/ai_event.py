@@ -39,3 +39,7 @@ class AIEvent(BaseModel):
     latency_ms: float = 0.0
     token_count: int = 0
     cost_estimate_usd: float = 0.0
+    # Explicit user feedback (§6.6 / Layer-6 online loop). PII-redacted at build
+    # time; empty for every non-feedback event. Additive — correlation keys above
+    # are what the EvalTrace contract pins.
+    feedback_comment: str = ""
