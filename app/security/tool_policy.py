@@ -62,6 +62,28 @@ DEFAULT_TOOL_POLICIES: dict[str, ToolCallPolicy] = {
         ],
         max_calls_per_request=3,
     ),
+    "parse_address": ToolCallPolicy(
+        tool_name="parse_address",
+        risk_tier="read",
+        allowed_routes=[
+            "/api/v1/agent/run",
+            "/api/v1/advisor/shipping",
+            "/api/v1/advisor/tracking",
+            "/api/v1/orchestration/run",
+        ],
+        max_calls_per_request=3,
+    ),
+    "check_restricted_items": ToolCallPolicy(
+        tool_name="check_restricted_items",
+        risk_tier="read",
+        allowed_routes=[
+            "/api/v1/agent/run",
+            "/api/v1/advisor/shipping",
+            "/api/v1/compliance/check",
+            "/api/v1/orchestration/run",
+        ],
+        max_calls_per_request=3,
+    ),
 }
 
 
