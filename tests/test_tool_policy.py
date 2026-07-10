@@ -45,6 +45,8 @@ def test_default_policies_cover_the_mcp_read_only_tools():
         "get_quote_preview",
         "calculate_dimensional_weight",
         "estimate_package_profile",
+        "parse_address",
+        "check_restricted_items",
     }
     # Every governed tool stays read/quote tier — MCP serves no write tool.
     assert all(p.risk_tier in {"read", "quote"} for p in DEFAULT_TOOL_POLICIES.values())
