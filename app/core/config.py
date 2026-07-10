@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     # Runtime AI-controls admin token (§12 incident response). EMPTY (default)
     # means /admin/ai-controls does not exist — fail-closed until configured.
     admin_api_token: str = ""
+    # Explicit user feedback endpoint (§6.6 / Layer-6 online loop). Gates
+    # POST /api/v1/feedback (404 when false).
+    feedback_enabled: bool = True
 
     # ── Shipping scope (platform policy) ─────────────────────────────────────
     # Deployment-level policy: does this deployment ship internationally or only
