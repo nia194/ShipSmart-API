@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     # Explicit user feedback endpoint (§6.6 / Layer-6 online loop). Gates
     # POST /api/v1/feedback (404 when false).
     feedback_enabled: bool = True
+    # Structured assistant contract (Product Roadmap §6). When true, routes emit
+    # the richer AssistantResponse (intent/apply_policy/result/…); the schema is
+    # additive so old clients keep working either way.
+    assistant_contract_v1: bool = False
 
     # ── Shipping scope (platform policy) ─────────────────────────────────────
     # Deployment-level policy: does this deployment ship internationally or only
