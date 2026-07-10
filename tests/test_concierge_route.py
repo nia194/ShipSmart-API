@@ -61,6 +61,25 @@ def test_chat_404_when_disabled(monkeypatch):
     assert r.status_code == 404
 
 
+def test_assistant_contract_field_is_gated_by_the_flag():
+    # Off by default (additive): old clients see no new field populated.
+    off = client.post("/api/v1/concierge/chat", json={"message": "I want to ship something"})
+    assert off.json()["assistant"] is None
+
+
+def test_assistant_contract_emitted_when_flag_on(monkeypatch):
+    monkeypatch.setattr(config_mod.settings, "assistant_contract_v1", True, raising=False)
+    r = client.post("/api/v1/concierge/chat", json={"message": "I want to ship something"})
+    a = r.json()["assistant"]
+    assert a is not None
+    assert a["schema_version"] == "1" and a["intent"] in {
+        "quote_search", "policy_question", "tracking_question", "recommendation",
+        "general_question",
+    }
+    # a thin/gathering turn asks a follow-up and carries a typed missing_info result
+    assert a["apply_policy"] == "none"
+
+
 def test_chat_empty_message_422():
     r = client.post("/api/v1/concierge/chat", json={"message": ""})
     assert r.status_code == 422

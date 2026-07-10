@@ -19,6 +19,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Request
 
+from app.agents.concierge.assistant_response import build_assistant_response
 from app.agents.concierge.models import ConversationState
 from app.agents.concierge.service import reconcile_recall, run_concierge
 from app.conversations.store import ConversationMessage, ConversationStore
@@ -106,7 +107,7 @@ async def concierge_chat(body: ConciergeRequest, request: Request) -> ConciergeR
     if store is not None:
         await _persist_turn(store, session_id, state, body.message, result)
 
-    return ConciergeResponse(
+    response = ConciergeResponse(
         reply=result.reply,
         state=ConciergeState(**result.state.to_wire()),
         session_id=session_id,
@@ -116,6 +117,11 @@ async def concierge_chat(body: ConciergeRequest, request: Request) -> ConciergeR
         decisions=result.decisions,
         provider=result.provider,
     )
+    # Emit the structured assistant contract additively when enabled (Product
+    # Roadmap §6) — the frontend renders types instead of re-parsing prose.
+    if settings.assistant_contract_v1:
+        response.assistant = build_assistant_response(response)
+    return response
 
 
 @router.get("/{session_id}", response_model=ConciergeHistoryResponse)

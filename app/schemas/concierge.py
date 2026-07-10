@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.schemas.chat import ReplyMessage
+from app.schemas.typed_outputs import AssistantResponse
 
 
 class ConciergeState(BaseModel):
@@ -44,6 +45,9 @@ class ConciergeResponse(BaseModel):
     sources: list[dict] = Field(default_factory=list)
     decisions: list[str] = Field(default_factory=list)
     provider: str = ""
+    # Structured assistant contract (Product Roadmap §6). Populated only when
+    # ASSISTANT_CONTRACT_V1 is enabled; None keeps old clients unaffected.
+    assistant: AssistantResponse | None = None
 
 
 class ConciergeMessage(BaseModel):
