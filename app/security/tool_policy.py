@@ -41,6 +41,27 @@ DEFAULT_TOOL_POLICIES: dict[str, ToolCallPolicy] = {
         ],
         max_calls_per_request=3,
     ),
+    # Package-intelligence tools (Product Roadmap §11 — read-only, deterministic).
+    "calculate_dimensional_weight": ToolCallPolicy(
+        tool_name="calculate_dimensional_weight",
+        risk_tier="read",
+        allowed_routes=[
+            "/api/v1/agent/run",
+            "/api/v1/advisor/shipping",
+            "/api/v1/orchestration/run",
+        ],
+        max_calls_per_request=3,
+    ),
+    "estimate_package_profile": ToolCallPolicy(
+        tool_name="estimate_package_profile",
+        risk_tier="read",
+        allowed_routes=[
+            "/api/v1/agent/run",
+            "/api/v1/advisor/shipping",
+            "/api/v1/orchestration/run",
+        ],
+        max_calls_per_request=3,
+    ),
 }
 
 
