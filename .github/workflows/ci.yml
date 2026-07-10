@@ -25,3 +25,8 @@ jobs:
 
       - name: Test (pytest)
         run: uv run pytest -q
+
+      # Dependency hygiene (guardrails §5.9). Report-only so a pre-existing
+      # advisory informs triage without blocking the build.
+      - name: Dependency audit (pip-audit, report-only)
+        run: uvx pip-audit || true
