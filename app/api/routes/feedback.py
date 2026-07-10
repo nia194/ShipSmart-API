@@ -16,12 +16,13 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from app.core.ai_events import AIEventSink, create_ai_event_sink, record_ai_event
 from app.core.config import settings
 from app.core.errors import AppError
+from app.core.rate_limit import limiter
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
@@ -50,8 +51,13 @@ class FeedbackResponse(BaseModel):
 
 
 @router.post("", response_model=FeedbackResponse, status_code=202)
-async def submit_feedback(body: FeedbackRequest) -> FeedbackResponse:
-    """Record one explicit feedback signal as a PII-safe, append-only AIEvent."""
+@limiter.limit(settings.rate_limit_feedback)
+async def submit_feedback(body: FeedbackRequest, request: Request) -> FeedbackResponse:
+    """Record one explicit feedback signal as a PII-safe, append-only AIEvent.
+
+    Rate-limited per caller (§6.6): feedback is an untrusted input and a gaming
+    vector, so a single user cannot flood the review queue with thumbs-down.
+    """
     if not settings.feedback_enabled:
         raise AppError(status_code=404, message="Feedback endpoint is disabled")
 
