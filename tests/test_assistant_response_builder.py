@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from app.agents.concierge.assistant_response import build_assistant_response
+from app.agents.concierge.assistant_response import (
+    build_assistant_response,
+    build_from_shipping_advice,
+)
+from app.schemas.advisor import DecisionPath, ShippingAdvisorResponse
 from app.schemas.concierge import ConciergeResponse, ConciergeState
 
 
@@ -70,3 +74,21 @@ def test_audit_and_confidence_are_rule_derived():
     assert a.audit is not None and a.audit.provider == "openai"
     assert a.audit.selection_method == "concierge"
     assert 0.0 <= a.confidence <= 1.0 and a.schema_version == "1"
+
+
+# ── advisor surface mapper ────────────────────────────────────────────────────
+def test_shipping_advice_maps_to_a_sourced_advisory_answer():
+    advice = ShippingAdvisorResponse(
+        answer="Ground is cheapest for a non-urgent box.",
+        reasoning_summary="compared price + transit",
+        tools_used=["get_quote_preview"],
+        sources=[{"source": "policies/carrier-comparison.md", "score": 0.8}],
+        context_used=True,
+        decision_path=DecisionPath(provider="openai", tags=["agent:tool"]),
+    )
+    a = build_from_shipping_advice(advice)
+    assert a.intent == "recommendation" and a.apply_policy == "none"  # advisory never mutates
+    assert a.result is not None and a.result.type == "policy_answer"
+    assert a.result.sources[0].source.startswith("policies/")
+    assert a.tool_calls[0].name == "get_quote_preview"
+    assert a.audit is not None and a.audit.selection_method == "advisor"
