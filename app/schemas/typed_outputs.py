@@ -133,6 +133,39 @@ AssistantResult = Annotated[
 ]
 
 
+# ── Grid action bus (Product Roadmap §6/§12) — typed, allowlisted grid controls ──
+SortBy = Literal["cheapest", "fastest", "best_value"]
+
+
+class GridFilter(BaseModel):
+    """A typed, allowlisted result-grid filter (never free-form prose)."""
+
+    price_under: float | None = None
+    arrives_by: str | None = None
+    carrier_not: list[str] = Field(default_factory=list)
+
+
+class SortGridAction(BaseModel):
+    type: Literal["sort_grid"] = "sort_grid"
+    by: SortBy
+
+
+class FilterGridAction(BaseModel):
+    type: Literal["filter_grid"] = "filter_grid"
+    grid_filter: GridFilter
+
+
+class SuggestAction(BaseModel):
+    type: Literal["suggest"] = "suggest"
+    chips: list[str] = Field(default_factory=list)
+
+
+GridAction = Annotated[
+    SortGridAction | FilterGridAction | SuggestAction,
+    Field(discriminator="type"),
+]
+
+
 class ToolCallTrace(BaseModel):
     """UI-visible tool-call transparency (name + args SHAPE, never raw args)."""
 
@@ -175,5 +208,6 @@ class AssistantResponse(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
     next_question: NextQuestion | None = None
     result: AssistantResult | None = None
+    grid_actions: list[GridAction] = Field(default_factory=list)
     tool_calls: list[ToolCallTrace] = Field(default_factory=list)
     audit: AssistantAudit | None = None
