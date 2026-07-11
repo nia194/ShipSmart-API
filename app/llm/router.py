@@ -20,6 +20,7 @@ Design notes (interview talking points):
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 from app.core.config import settings
@@ -134,6 +135,42 @@ class LLMRouter:
                     )
 
         # Chain exhausted on retryable errors.
+        raise last_error or ProviderOutageError(detail="empty LLM chain")
+
+    async def stream(
+        self,
+        task: str,
+        messages: list[dict[str, str]],
+        *,
+        request_id: str = "",
+    ) -> AsyncIterator[str]:
+        """Stream ``task`` token deltas, failing over ONLY before the first token.
+
+        Once a delta has been yielded we cannot un-send it, so a mid-stream error
+        propagates; a failure before any output (or a terminal error) fails over
+        to the next provider in the chain exactly like ``execute``.
+        """
+        chain = self.chain_for(task)
+        last_error: LLMError | None = None
+
+        for hop, client in enumerate(chain):
+            started = False
+            try:
+                async for delta in client.stream(messages):
+                    started = True
+                    yield delta
+                return  # provider completed the stream
+            except Exception as exc:  # noqa: BLE001 - classified below
+                err = classify_provider_error(exc, client.provider_name)
+                last_error = err
+                logger.warning(
+                    "LLM stream hop failed: task=%s provider=%s class=%s started=%s hop=%d rid=%s",
+                    task, client.provider_name, err.kind, started, hop, request_id,
+                )
+                if started or not err.retryable:
+                    raise err from exc  # can't recover mid-stream, or terminal error
+                # nothing yielded yet + retryable → try the next provider
+
         raise last_error or ProviderOutageError(detail="empty LLM chain")
 
     def describe(self) -> dict[str, str]:
