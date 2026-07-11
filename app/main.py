@@ -21,6 +21,7 @@ from app.api.routes import (
     admin,
     advisor,
     agent,
+    assistant,
     compare,
     compliance,
     concierge,
@@ -78,6 +79,7 @@ app.include_router(compliance.router, prefix="/api/v1")
 app.include_router(concierge.router, prefix="/api/v1")
 app.include_router(workflow.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
+app.include_router(assistant.router, prefix="/api/v1")
 app.include_router(feedback.router, prefix="/api/v1")
 app.include_router(compare.router, prefix="/api")
 
