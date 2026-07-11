@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.schemas.chat import ReplyMessage
+from app.schemas.typed_outputs import AssistantResponse
 
 
 class DecisionPath(BaseModel):
@@ -49,6 +50,9 @@ class ShippingAdvisorResponse(BaseModel):
     sources: list[dict]
     context_used: bool
     decision_path: DecisionPath | None = None
+    # Structured assistant contract (Product Roadmap §6). Populated only when
+    # ASSISTANT_CONTRACT_V1 is enabled; None keeps old clients unaffected.
+    assistant: AssistantResponse | None = None
 
 
 class TrackingAdvisorRequest(BaseModel):
