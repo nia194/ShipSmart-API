@@ -14,6 +14,7 @@ builder is always safe to call (additive, side-effect-free).
 from __future__ import annotations
 
 from app.agents.concierge.apply_policy import decide_apply_policy
+from app.schemas.advisor import ShippingAdvisorResponse
 from app.schemas.concierge import ConciergeResponse
 from app.schemas.typed_outputs import (
     AssistantAudit,
@@ -22,6 +23,7 @@ from app.schemas.typed_outputs import (
     NextQuestion,
     PolicyAnswerResult,
     SourceCitation,
+    ToolCallTrace,
 )
 
 # Concierge intent → the roadmap §6 AssistantIntent vocabulary.
@@ -93,4 +95,25 @@ def build_assistant_response(response: ConciergeResponse) -> AssistantResponse:
         next_question=next_question,
         result=result,
         audit=AssistantAudit(provider=response.provider, selection_method="concierge"),
+    )
+
+
+def build_from_shipping_advice(response: ShippingAdvisorResponse) -> AssistantResponse:
+    """Map a shipping-advice response to the typed AssistantResponse (advisor surface).
+
+    Shipping advice is advisory (never mutates the form): apply_policy is always
+    ``none``, and the grounded answer becomes a sourced ``policy_answer`` result.
+    """
+    citations = _sources(response.sources)
+    provider = response.decision_path.provider if response.decision_path else ""
+    return AssistantResponse(
+        type="answer",
+        message=response.answer,
+        sources=citations,
+        intent="recommendation",
+        apply_policy="none",
+        confidence=0.7 if response.context_used else 0.5,
+        result=PolicyAnswerResult(answer=response.answer, sources=citations),
+        tool_calls=[ToolCallTrace(name=t) for t in response.tools_used],
+        audit=AssistantAudit(provider=provider, selection_method="advisor"),
     )

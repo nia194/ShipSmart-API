@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Header, Request
 
+from app.agents.concierge.assistant_response import build_from_shipping_advice
 from app.core.config import settings
 from app.core.errors import AppError
 from app.core.rate_limit import limiter
@@ -83,7 +84,7 @@ async def shipping_advisor(
         request_id=getattr(request.state, "request_id", ""),
     )
 
-    return ShippingAdvisorResponse(
+    response = ShippingAdvisorResponse(
         answer=advice.answer,
         reasoning_summary=advice.reasoning_summary,
         tools_used=advice.tools_used,
@@ -91,6 +92,9 @@ async def shipping_advisor(
         context_used=advice.context_used,
         decision_path=_decision_path(advice.decision_path),
     )
+    if settings.assistant_contract_v1:
+        response.assistant = build_from_shipping_advice(response)
+    return response
 
 
 # ── Tracking Advisor ────────────────────────────────────────────────────────
