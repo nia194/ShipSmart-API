@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -64,6 +65,15 @@ class LLMClient(ABC):
     @abstractmethod
     async def complete(self, messages: list[dict[str, str]]) -> str:
         """Send messages to the LLM and return the text response."""
+
+    async def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+        """Yield the completion incrementally as text deltas.
+
+        Default: providers without native streaming produce the whole answer in
+        one chunk (so callers get a uniform interface and degrade gracefully).
+        Streaming providers override this to yield token deltas as they arrive.
+        """
+        yield await self.complete(messages)
 
     async def complete_with_tools(
         self,
@@ -127,6 +137,25 @@ class OpenAIClient(LLMClient):
             return response.choices[0].message.content or ""
         except Exception as e:
             logger.error("OpenAI API error: %s", e)
+            raise classify_provider_error(e, self.provider_name) from e
+
+    async def stream(  # pragma: no cover - needs keys
+        self, messages: list[dict[str, str]]
+    ) -> AsyncIterator[str]:
+        try:
+            stream = await self._client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                temperature=self._temperature,
+                max_tokens=self._max_tokens,
+                stream=True,
+            )
+            async for chunk in stream:
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if delta:
+                    yield delta
+        except Exception as e:
+            logger.error("OpenAI streaming error: %s", e)
             raise classify_provider_error(e, self.provider_name) from e
 
 
@@ -601,6 +630,12 @@ class EchoClient(LLMClient):
             "AI-powered answers will provide more detailed, personalized guidance."
         )
         return response
+
+    async def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+        """Deterministic word-by-word streaming — keyless, so the SSE path is testable."""
+        text = await self.complete(messages)
+        for index, word in enumerate(text.split(" ")):
+            yield word if index == 0 else " " + word
 
 
 # ── Factory ──────────────────────────────────────────────────────────────────
