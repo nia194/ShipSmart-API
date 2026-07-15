@@ -315,7 +315,7 @@ sequenceDiagram
     end
     A->>A: validate typed envelope
     A-->>W: data: {"done": true, "assistant": AssistantResponse}
-    Note over W: onDelta renders progressively; onDone swaps in typed cards
+    Note over W: onDelta renders progressively, then onDone swaps in typed cards
 ```
 
 The envelope is a **discriminated union** (`shipping_option | comparison |
