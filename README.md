@@ -12,10 +12,12 @@
 > The **AI layer** of the ShipSmart platform: a task-routed, failover-hardened
 > multi-provider LLM stack behind **one guardrail choke point** — hybrid +
 > iterative RAG with grounding-or-refuse, **typed structured outputs** the UI
-> renders (never parsed prose), a read-only tool-calling agent, durable
-> human-in-the-loop workflows, SSE token streaming, and an append-only,
-> pseudonymized audit trail with runtime kill-switches. **Deterministic core,
-> model at the edges.**
+> renders (never parsed prose), **multi-step agentic orchestration** (a
+> read-only tool-calling agent loop + compliance critic rounds, model-in-control)
+> beside **multi-step deterministic orchestration** (a durable human-in-the-loop
+> workflow pipeline + the concierge state machine, code-in-control), SSE token
+> streaming, and an append-only, pseudonymized audit trail with runtime
+> kill-switches. **Deterministic core, model at the edges.**
 
 Owns no transactional data; provides grounded shipping advice, a slot-filling
 concierge, compliance review, recommendation scoring, and multi-agent workflows
@@ -47,7 +49,7 @@ the resolved feature flags and LLM chains ·
 - [RAG done properly](#rag-done-properly)
 - [The guardrail control plane](#the-guardrail-control-plane)
 - [Streaming & the typed assistant contract](#streaming--the-typed-assistant-contract)
-- [Agent surfaces](#agent-surfaces)
+- [Orchestration: multi-step agentic vs deterministic](#orchestration-multi-step-agentic-vs-deterministic)
 - [Object design (OOD)](#object-design-ood)
 - [Data flow & privacy](#data-flow--privacy)
 - [Observability, audit & kill-switches](#observability-audit--kill-switches)
@@ -324,31 +326,194 @@ types and parity-tested in CI. Even refusals stream.
 
 ---
 
-## Agent surfaces
+<a id="agent-surfaces"></a>
+## Orchestration: multi-step agentic vs deterministic
 
-**Figure 8 — the read-only tool agent loop.**
+The service runs **two kinds of multi-step orchestration**, and names them
+honestly. The dividing line is **who chooses the next step**:
+
+- **Multi-step agentic orchestration — the model owns control flow.** It decides
+  which tool to call next (or to stop), and each observation feeds its next
+  decision. Present in exactly two places: **the agent loop** (`POST /agent/run`)
+  and **the compliance critic rounds** (inside `POST /compliance/check` and the
+  workflow's compliance stage).
+- **Multi-step deterministic orchestration — code owns control flow.** A state
+  machine fixes the sequence; no model output can change what happens next.
+  Present in **the multi-agent shipment-preparation pipeline with durable
+  human-in-the-loop review** (`POST /workflow/process`) and **the concierge
+  conversation state machine** (`POST /concierge/chat`).
+
+An LLM *inside* a step — slot extraction, advisory synthesis, a one-pass tool
+pick — does not make a flow agentic. That is **LLM-in-a-step**; agentic means
+**LLM-in-control**. By that rule `POST /orchestration/run` is neither: it is a
+**single-step** router (explicit tool, or one model pass to choose it, executed
+once). And the two families meet in one place: the deterministic workflow
+pipeline **embeds** the agentic critic rounds as one of its stages — a bounded
+agentic step running inside a deterministic, durable workflow.
+
+**Figure 8 — the taxonomy at a glance.** Both families sit on the same
+primitives; the primitives never own control flow.
+
+```mermaid
+flowchart TB
+    subgraph AGENTIC["Multi-step agentic — model picks the next step"]
+        AL["Agent loop<br/>POST /agent/run<br/>reason -> act -> observe"]
+        CR["Compliance critic rounds<br/>inside POST /compliance/check<br/>propose gaps -> ground -> repeat"]
+    end
+    subgraph DET["Multi-step deterministic — code picks the next step"]
+        WF["Shipment-preparation pipeline + HITL review<br/>POST /workflow/process"]
+        CG["Concierge conversation state machine<br/>POST /concierge/chat"]
+    end
+    OR["Tool router — single-step, for contrast<br/>POST /orchestration/run"]
+    subgraph PRIM["Shared primitives — never own control flow"]
+        RTR2["LLMRouter failover chains"]
+        RAG2["single-shot RAG retrieval"]
+        GRD["guardrail gates"]
+        MCP2["read-only MCP tools"]
+        AUD["decision trail + AIEvent audit"]
+    end
+    WF -- "compliance stage embeds" --> CR
+    CG -- "dispatches into" --> WF
+    CG -- "dispatches into" --> AL
+    AL --> PRIM
+    CR --> PRIM
+    WF --> PRIM
+    CG --> PRIM
+    OR --> PRIM
+```
+
+| Surface | Endpoints | Next step chosen by | The model's role | Hard bounds | Keyless / provider-down |
+|---|---|---|---|---|---|
+| **Agent loop** | `POST /agent/run` | **model** | plans; picks `validate_address` / `get_quote_preview` / `retrieve_rag`; reads observations (tool errors included) and recovers | `AGENT_MAX_STEPS` (5) · `AGENT_MAX_RETRIEVALS` (2) · read-only tools · pre-execution `tool_policy` | no native tool calling ⇒ single-pass fallback, tagged `agent:fallback:text` |
+| **Compliance critic rounds** | inside `POST /compliance/check` + the workflow compliance stage | **model directs attention** inside a code-bounded loop | proposes missed areas via a native `propose_gaps` tool call; can never assert a conclusion | `COMPLIANCE_CRITIQUE_MAX_ROUNDS` (0 = off) · `COMPLIANCE_MAX_GAP_AREAS` (3) · repeat proposals rejected | critic no-ops (zero gaps); the deterministic pass is unaffected |
+| **Shipment pipeline + HITL review** | `POST /workflow/process` · `GET /workflow/{id}` · `POST /workflow/{id}/review` | **code** (`StateMachineEngine`) | only inside the compliance stage (critic + advisory summary) | fixed stage graph · checkpoint after every node · suspends on an unverified high-risk area | mock domain adapters keep every stage computable |
+| **Concierge state machine** | `POST /concierge/chat` · `GET /concierge/{session_id}` | **code** (turn cycle) | slot/intent extraction within one step | required-slot gate · HMAC-signed state · scope check | deterministic extraction; mid-dispatch LLM failure degrades to a tagged summary |
+
+### Multi-step agentic orchestration
+
+#### The agent loop — `app/services/agent_service.py`
+
+A reasoning model drives a bounded **reason → act → observe** loop. Each
+iteration it either emits tool calls or a final turn; observations — including
+tool *errors* — are fed back as messages, so the model can recover rather than
+abort. `retrieve_rag` wraps the deterministic single-shot RAG as a tool, which
+puts retrieval *under the model's reasoning* while the RAG layer itself stays
+model-free. Re-retrieval is **conditionally agentic**: the model sees each
+retrieval's coverage signal and may search again with a reformulated query —
+bounded by the retrieval cap and a degenerate-retry guard (the same normalized
+query twice is rejected, with an observation explaining why). Whatever the loop
+gathers, the final answer is *always* produced by the guardrailed assembler and
+the synthesis failover chain — grounding and failover are **reused, not
+re-invented**.
+
+**Figure 9 — LLD: one run of the agent loop.**
 
 ```mermaid
 sequenceDiagram
-    participant U as User
+    participant C as Client
     participant AG as agent_service
+    participant RM as Reasoning model
     participant TP as tool_policy
-    participant MC as MCP (/tools/call)
-    U->>AG: POST /agent/run
-    loop steps ≤ step cap
-        AG->>AG: plan next action (model)
-        AG->>TP: validate tool + args + route + confirmation
-        alt denied
-            TP-->>AG: refusal (tagged)
-        else allowed
-            AG->>MC: tools/call (X-MCP-Api-Key)
-            MC-->>AG: read-only result
+    participant MC as MCP /tools/call
+    participant RG as retrieve_rag (single-shot RAG)
+    participant SY as Guardrailed synthesis chain
+    C->>AG: POST /agent/run
+    Note over AG: decisions += agent:plan
+    loop step <= AGENT_MAX_STEPS
+        AG->>RM: complete_with_tools(messages, tools)
+        alt final turn
+            RM-->>AG: done — exit loop
+        else tool calls
+            RM-->>AG: [tool_call, ...]
+            AG->>TP: validate tool + args + route
+            alt retrieve_rag
+                AG->>RG: search (cap AGENT_MAX_RETRIEVALS, repeats rejected)
+                RG-->>AG: chunks + coverage signal
+            else MCP tool
+                AG->>MC: tools/call (read-only, X-MCP-Api-Key)
+                MC-->>AG: observation (errors become observations too)
+            end
+            AG->>RM: tool_result blocks appended to messages
         end
     end
-    AG-->>U: typed answer + tool_calls audit trail
+    Note over AG: cap hit without a final turn -> decisions += agent:max_steps
+    AG->>SY: assemble(chunks + tool evidence) -> synthesis failover chain
+    SY-->>C: grounded answer + steps trace + tools_used + decision trail
 ```
 
-**Figure 9 — the durable workflow with human-in-the-loop (state machine).**
+**Honest degradation:** providers without native tool calling raise
+`NotImplementedError` on the first planning step — the endpoint then runs the
+existing single-pass text selection instead, tagged `agent:fallback:text`. The
+keyless default (Echo) answers; it never 500s for lack of keys.
+
+#### The compliance critic rounds — `app/agents/compliance/critic.py` + `service.py`
+
+The compliance flow is deterministic first: **structural checks** (pure rules),
+then **fixed-area grounded investigation**. Only then does the critic loop run:
+while under the rounds cap, a reasoning model is asked *"what did this pass
+miss?"* and answers through a `propose_gaps` tool call. The contract is strict —
+**the model can only direct attention, never assert conclusions**. Every
+proposed area is grounded through the same `retrieve_area` primitive; a
+proposal the corpus cannot cover becomes an honest `unverified` finding, never a
+fabricated flag. Rounds stop early when the critic has nothing new
+(`critique:complete`), skip repeats per-area (`critique:rejected`), or stop at
+the cap (`critique:capped`). The default `COMPLIANCE_CRITIQUE_MAX_ROUNDS=0`
+ships the flow **fully deterministic** — turning the dial up is the explicit,
+audited opt-in to agency.
+
+**Figure 10 — the bounded critic loop embedded in the deterministic flow.**
+
+```mermaid
+flowchart TB
+    S["structural checks — pure rules"] --> FA["fixed-area grounded investigation"]
+    FA --> R{"round < COMPLIANCE_CRITIQUE_MAX_ROUNDS?"}
+    R -- "no" --> SUM["advisory summary — guardrailed synthesis"]
+    R -- "yes" --> PG["model: propose_gaps (<= COMPLIANCE_MAX_GAP_AREAS)"]
+    PG -- "no proposals" --> DONE["critique:complete"]
+    PG -- "proposals" --> DUP{"area already investigated?"}
+    DUP -- "yes" --> REJ["critique:rejected"] --> R
+    DUP -- "no" --> GRD2["ground via retrieve_area<br/>uncovered -> honest unverified finding"]
+    GRD2 --> R
+    DONE --> SUM
+    SUM --> V["verdict + append-only audit AIEvent"]
+```
+
+### Multi-step deterministic orchestration
+
+#### The shipment-preparation pipeline with durable HITL review — `app/workflow/`
+
+`DurableWorkflow` wires the specialist agents into a **fixed stage graph** run
+by a `WorkflowEngine` protocol (`StateMachineEngine` today; a LangGraph adapter
+could swap in behind the same protocol). The point is architectural: **control
+flow lives in plain, auditable Python — never in a model.**
+
+Durability + human-in-the-loop: state **checkpoints after every node** (SQLite
+adapter under `WORKFLOW_DURABLE=true` — resume survives a process restart). If
+the compliance stage leaves a **high-risk area unverified**, the run tags
+`workflow:interrupt:human_review`, enqueues a review item, and suspends as
+`awaiting_review`. The officer's determination re-enters **in code** via
+`POST /workflow/{id}/review` — `cleared` resumes to documentation, `blocked`
+terminates — and is recorded as a *human* audit event. The model never authors
+the determination.
+
+**Figure 11 — the stage graph (control flow is code).**
+
+```mermaid
+flowchart LR
+    IN["POST /workflow/process"] --> CL["classify — HS codes"]
+    CL --> PAR{{"parallel"}}
+    PAR --> LC["landed cost — duty rates"]
+    PAR --> RTG["carrier routing"]
+    LC --> CP["compliance screening<br/>embeds the critic rounds (Fig. 10)"]
+    RTG --> CP
+    CP -- "all high-risk areas verified" --> DOC["customs documentation"]
+    CP -- "unverified high-risk area" --> HR["suspend: awaiting_review<br/>checkpoint + review queue"]
+    HR -- "officer: cleared — injected in code" --> DOC
+    HR -- "officer: blocked" --> TERM["terminated"]
+    DOC --> OUT["completed — checkpointed"]
+```
+
+**Figure 12 — lifecycle: checkpoint/resume across requests and restarts.**
 
 ```mermaid
 stateDiagram-v2
@@ -363,18 +528,73 @@ stateDiagram-v2
     Rejected --> [*]
 ```
 
-| Surface | What it is | Containment |
+#### The concierge conversation state machine — `app/agents/concierge/service.py`
+
+Every turn runs the same coded cycle — **the model extracts, code decides.**
+Guardrails at the LLM edge → NLU extraction (LLM-assisted; deterministic when
+keyless) → fold the turn into state (gap-fill / newest-wins; explicit
+corrections win outright) → choose intent → scope check → required-slot gate →
+either a targeted clarification or a dispatch to a worker: the **workflow
+bridge** (international shipment, all flags on), the **agent/RAG path**,
+**tracking**, or **compliance**. A mid-dispatch provider failure degrades to a
+tagged summary reply (`concierge:dispatch:llm_degraded`) — the turn still
+answers. Conversation state is **HMAC-signed** client-side (unsigned ⇒ treated
+as empty) with a server-side recall store behind `GET /concierge/{session_id}`.
+
+**Figure 13 — one concierge turn.**
+
+```mermaid
+flowchart TB
+    M["user message + signed state"] --> G["guardrail gates"]
+    G --> X["extract_nlu — LLM-in-a-step"]
+    X --> GR3{"pure greeting, nothing extracted?"}
+    GR3 -- "yes" --> W["welcome + orient"]
+    GR3 -- "no" --> F["fold_turn: gap-fill / newest-wins<br/>apply_corrections: overrides win"]
+    F --> I["choose_intent"]
+    I --> SC{"violates shipping scope?"}
+    SC -- "yes" --> SB["honest scope reply — dispatched_to: scope_blocked"]
+    SC -- "no" --> MS{"required slots missing or ambiguous?"}
+    MS -- "yes" --> CLR["targeted clarification question"]
+    MS -- "no" --> D["dispatch by intent"]
+    D --> WFB["workflow bridge — international"]
+    D --> AGP["agent / RAG path"]
+    D --> TRK["tracking guidance"]
+    D --> CMP["compliance check"]
+    WFB & AGP & TRK & CMP --> RP["reply + HMAC-signed full-state echo + decision trail"]
+```
+
+### The decision trail is the proof
+
+Every hop above appends a machine-checkable tag to the response's decision
+trail (and to the audit ledger); ShipSmart-Test's decision-tag registry asserts
+the vocabulary cross-repo. Real trails look like:
+
+| Surface | Trail excerpt |
+|---|---|
+| Agent loop | `agent:plan · agent:step1 · agent:tool:retrieve_rag · agent:retrieve:1 · agent:retrieve:reformulate · agent:step2 · agent:tool:get_quote_preview` — keyless: `agent:plan · agent:step1 · agent:fallback:text` |
+| Critic rounds | `compliance:plan · compliance:investigate:<area> · critique:round:1 · critique:gap:<area> · critique:complete · compliance:verdict:<verdict>` |
+| Workflow | `workflow:start · workflow:classify:<hs_code> · workflow:interrupt:human_review` — resume records a human audit event |
+| Concierge | `concierge:plan · concierge:intent:<intent> · concierge:dispatch:<intent>` — honest edges: `concierge:scope:domestic_only`, `concierge:dispatch:llm_degraded` |
+
+**The dials (all 12-factor env, all audited):**
+
+| Dial | Default | Meaning |
 |---|---|---|
-| **Concierge** | multi-turn slot-filling chat; deterministic intent extraction with LLM fallback | client-owned **HMAC-signed** state; server-side recall store |
-| **Tool agent** | model-driven plan→retrieve→call loop | step/retrieval caps · pre-execution tool policy · read-only |
-| **Compliance** | areas → structural rules → critic | **advisory-only**: never a fabricated clearance |
-| **Workflow** | checkpointed multi-agent run over the deterministic domain core | suspends to a human review queue |
+| `AGENT_MAX_STEPS` | 5 | hard cost bound on the agent loop |
+| `AGENT_MAX_RETRIEVALS` | 2 | `retrieve_rag` calls per run; degenerate retries rejected |
+| `COMPLIANCE_CRITIQUE_MAX_ROUNDS` | 0 | critic rounds are **opt-in**; 0 ships fully deterministic |
+| `COMPLIANCE_MAX_GAP_AREAS` | 3 | proposals accepted per critic round |
+| runtime kill-switches | — | `agent · concierge · workflow · compliance · rag` flippable per-feature, audited (see [Observability](#observability-audit--kill-switches)) |
+
+One sentence, if you only keep one: **a bounded agentic loop (and bounded
+critic rounds) run inside deterministic rails — everything else is code-owned
+orchestration, and the decision trail proves which was which on every request.**
 
 ---
 
 ## Object design (OOD)
 
-**Figure 10 — the LLM layer and typed outputs.** The seven gate modules are
+**Figure 14 — the LLM layer and typed outputs.** The seven gate modules are
 pure-Python units with no framework coupling — which is why 499 tests run
 keylessly in minutes.
 
@@ -428,7 +648,7 @@ classDiagram
 
 ## Data flow & privacy
 
-**Figure 11 — where identity and free text are protected.** Raw identity never
+**Figure 15 — where identity and free text are protected.** Raw identity never
 reaches the ledger — `session_id_hash` is an HMAC pseudonym; free text is
 redacted before persistence; `prompt_version` / `schema_version` /
 `embedding_version` make any answer reproducible.
@@ -512,7 +732,7 @@ xychart-beta
 |---|---|
 | Advisory | `POST /advisor/shipping` · `/advisor/tracking` · `/advisor/recommendation` |
 | Assistant | `POST /concierge/chat` · `GET /concierge/{session_id}` · `POST /assistant/stream` (SSE) |
-| Agent | `POST /agent/run` · `GET /agent/tools` |
+| Agent / Orchestration | `POST /agent/run` · `POST /orchestration/run` · `GET /orchestration/tools` |
 | Compliance / Workflow | `POST /compliance/check` · `POST /workflow/process` · `POST /workflow/{id}/review` · `GET /workflow/{id}` |
 | RAG / Compare | `POST /rag/query` · `POST /rag/ingest` · `POST /compare` |
 | Ops | `GET /health` · `GET /ready` · `GET /info` · `POST /feedback` · `GET|POST /admin/ai-controls` |
@@ -521,7 +741,7 @@ xychart-beta
 
 ## Deployment topology
 
-**Figure 12 — production layout.** `/docs` dev-only; features env-flagged;
+**Figure 16 — production layout.** `/docs` dev-only; features env-flagged;
 `GET /ready` is the wiring inspection.
 
 ```mermaid
